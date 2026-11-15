@@ -7,8 +7,8 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from typing import Optional
-from urllib.parse import quote_plus, urljoin
+from typing import Optional, Tuple
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -159,6 +159,14 @@ class MultiSourceRadarCollector:
             for item_el in root.findall(".//item"):
                 title = (item_el.findtext("title") or "").strip()
                 link = (item_el.findtext("link") or "").strip()
+                # Extract clean target URL if wrapped in Bing apiclick redirect
+                try:
+                    parsed_bing = urlparse(link)
+                    qs = parse_qs(parsed_bing.query)
+                    if "url" in qs and qs["url"]:
+                        link = unquote(qs["url"][0])
+                except Exception:
+                    pass
                 desc = (item_el.findtext("description") or "").strip()
                 pub_raw = item_el.findtext("pubDate")
                 source_el = item_el.find("source")
@@ -200,6 +208,14 @@ class MultiSourceRadarCollector:
             for item_el in root.findall(".//item"):
                 title = (item_el.findtext("title") or "").strip()
                 link = (item_el.findtext("link") or "").strip()
+                # Extract clean target URL if wrapped in Bing apiclick redirect
+                try:
+                    parsed_bing = urlparse(link)
+                    qs = parse_qs(parsed_bing.query)
+                    if "url" in qs and qs["url"]:
+                        link = unquote(qs["url"][0])
+                except Exception:
+                    pass
                 desc = (item_el.findtext("description") or "").strip()
                 pub_raw = item_el.findtext("pubDate")
                 pub_dt = parse_rss_datetime(pub_raw)

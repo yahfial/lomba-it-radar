@@ -24,7 +24,7 @@ class RadarConfig(BaseModel):
         default_factory=lambda: int(os.getenv("SCAN_INTERVAL_MINUTES", "15"))
     )
     max_age_days: int = Field(
-        default_factory=lambda: int(os.getenv("MAX_AGE_DAYS", "30"))
+        default_factory=lambda: int(os.getenv("MAX_AGE_DAYS", "7"))
     )
     db_path: Path = Field(
         default_factory=lambda: Path(os.getenv("DB_PATH", "data/radar_history.db"))

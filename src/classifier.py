@@ -2,9 +2,51 @@
 from __future__ import annotations
 
 import re
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 from src.models import CompetitionCategory
+
+WIB_TZ = timezone(timedelta(hours=7))
+
+MONTH_NAME_TO_NUM: dict[str, int] = {
+    "jan": 1,
+    "januari": 1,
+    "january": 1,
+    "feb": 2,
+    "februari": 2,
+    "february": 2,
+    "mar": 3,
+    "maret": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "mei": 5,
+    "may": 5,
+    "jun": 6,
+    "juni": 6,
+    "june": 6,
+    "jul": 7,
+    "juli": 7,
+    "july": 7,
+    "agu": 8,
+    "agustus": 8,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "okt": 10,
+    "oktober": 10,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "des": 12,
+    "desember": 12,
+    "dec": 12,
+    "december": 12,
+}
 
 # Category keyword mapping (Indonesian & English terms)
 CATEGORY_PATTERNS: dict[CompetitionCategory, list[str]] = {
@@ -158,6 +200,10 @@ NEGATIVE_NOISE_PATTERNS: list[str] = [
     r"\blomba\s+menggambar\s+anak\b",
     r"\bcpns\b",
     r"\blowongan\s+kerja\s+admin\b",
+    r"\bwebsite\s+desa\b",
+    r"\bdesa\s+wisata\b",
+    r"\bkelurahan\b",
+    r"\bantar\s+opd\b",
     r"\b201[5-9]\b",
     r"\b202[0-4]\b",
 ]
@@ -192,8 +238,68 @@ def extract_registration_deadline(text: str) -> Optional[str]:
     return None
 
 
+def parse_deadline_date(
+    deadline_str: Optional[str], reference_date: Optional[date] = None
+) -> Optional[date]:
+    """Parse an Indonesian/English deadline string into a concrete `datetime.date`."""
+    if not deadline_str:
+        return None
+
+    today = reference_date or datetime.now(WIB_TZ).date()
+    cleaned = deadline_str.strip().lower()
+
+    # 1. Text month format: "13 november 2026" or "13 nov"
+    m_text = re.search(
+        rf"(\d{{1,2}})\s+({MONTHS_ID_EN})(?:\s+(\d{{4}}))?",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if m_text:
+        day_num = int(m_text.group(1))
+        month_raw = m_text.group(2).lower()
+        month_num = MONTH_NAME_TO_NUM.get(month_raw)
+        if not month_num:
+            # prefix fallback
+            for k, v in MONTH_NAME_TO_NUM.items():
+                if month_raw.startswith(k):
+                    month_num = v
+                    break
+        year_num = int(m_text.group(3)) if m_text.group(3) else today.year
+        if month_num:
+            try:
+                return date(year_num, month_num, day_num)
+            except ValueError:
+                return None
+
+    # 2. Numeric format: "25/11/2026" or "25-11-26"
+    m_num = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", cleaned)
+    if m_num:
+        day_num = int(m_num.group(1))
+        month_num = int(m_num.group(2))
+        year_num = int(m_num.group(3))
+        if year_num < 100:
+            year_num += 2000
+        try:
+            return date(year_num, month_num, day_num)
+        except ValueError:
+            return None
+
+    return None
+
+
+def is_deadline_expired(
+    deadline_str: Optional[str], reference_date: Optional[date] = None
+) -> bool:
+    """Return True if a parsed deadline date is strictly in the past (< today WIB)."""
+    parsed = parse_deadline_date(deadline_str, reference_date=reference_date)
+    if parsed is None:
+        return False
+    today = reference_date or datetime.now(WIB_TZ).date()
+    return parsed < today
+
+
 def evaluate_competition_relevance(
-    title: str, snippet: str = ""
+    title: str, snippet: str = "", reference_date: Optional[date] = None
 ) -> Tuple[bool, int, list[CompetitionCategory], list[str]]:
     """
     Evaluate whether a scraped article/post is an active/upcoming Indonesian IT competition.
@@ -212,6 +318,11 @@ def evaluate_competition_relevance(
     for post_pattern in POST_EVENT_CEREMONIAL_PATTERNS:
         if re.search(post_pattern, combined_text, flags=re.IGNORECASE):
             return False, 0, [], []
+
+    # 3. Hard-reject if extracted registration deadline has already passed!
+    extracted_deadline = extract_registration_deadline(f"{title} {snippet}")
+    if is_deadline_expired(extracted_deadline, reference_date=reference_date):
+        return False, 0, [], []
 
     matched_categories: list[CompetitionCategory] = []
     matched_keywords: list[str] = []

@@ -1,9 +1,15 @@
 # D:\alfa\Documents\Antigravity\lomba-it-radar\tests\test_radar.py
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
-from src.classifier import evaluate_competition_relevance, extract_registration_deadline
+from src.classifier import (
+    evaluate_competition_relevance,
+    extract_registration_deadline,
+    is_deadline_expired,
+    parse_deadline_date,
+)
 from src.models import CompetitionCategory, CompetitionItem, canonicalize_url
 from src.notifier import format_telegram_message
 from src.storage import RadarStorage
@@ -99,6 +105,38 @@ def test_extract_registration_deadline() -> None:
 
     text3 = "Kompetisi Coding Nasional tanpa info tanggal"
     assert extract_registration_deadline(text3) is None
+
+
+def test_expired_deadline_is_hard_rejected() -> None:
+    ref_today = date(2026, 11, 15)
+    assert parse_deadline_date("13 November 2026", reference_date=ref_today) == date(2026, 11, 13)
+    assert is_deadline_expired("13 November 2026", reference_date=ref_today) is True
+    assert is_deadline_expired("15 November 2026", reference_date=ref_today) is False
+    assert is_deadline_expired("28 November 2026", reference_date=ref_today) is False
+
+    # Exact case reported by user: deadline 13 November 2026 when today is 15 November 2026
+    is_valid_past, _, _, _ = evaluate_competition_relevance(
+        "Kementerian Desa Buka Lomba Website Desa Nasional 2027, Pendaftaran hingga 13 November 2026",
+        "Pendaftaran hingga 13 November 2026",
+        reference_date=ref_today,
+    )
+    assert is_valid_past is False
+
+    # Also test a real IT hackathon with an expired deadline
+    is_valid_expired_it, _, _, _ = evaluate_competition_relevance(
+        "Pendaftaran Hackathon Nasional ITB Dibuka hingga 10 November 2026",
+        "Segera daftar hackathon software development nasional.",
+        reference_date=ref_today,
+    )
+    assert is_valid_expired_it is False
+
+    # And a real IT hackathon with a future deadline
+    is_valid_future_it, _, _, _ = evaluate_competition_relevance(
+        "Pendaftaran Hackathon Nasional ITB Dibuka hingga 28 November 2026",
+        "Segera daftar hackathon software development nasional.",
+        reference_date=ref_today,
+    )
+    assert is_valid_future_it is True
 
 
 def test_telegram_html_formatting() -> None:
