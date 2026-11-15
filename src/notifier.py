@@ -34,16 +34,22 @@ def format_telegram_message(item: CompetitionItem) -> str:
         clean_snip = html.escape(item.snippet[:220])
         snippet_block = f"\n📝 <b>Ringkasan:</b>\n<i>{clean_snip}</i>\n"
 
+    if item.registration_deadline:
+        deadline_str = html.escape(item.registration_deadline)
+    else:
+        deadline_str = "Cek detail tanggal pada link pendaftaran"
+
     safe_url = html.escape(item.url, quote=True)
 
     return (
-        f"🚨 <b>[RADAR LOMBA IT NASIONAL BARU]</b>\n\n"
+        f"🚨 <b>[LOMBA IT NASIONAL — BUKA PENDAFTARAN]</b>\n\n"
         f"🏆 <b>{safe_title}</b>\n"
         f"🏷️ <b>Kategori:</b> {safe_cats}\n"
+        f"⏳ <b>Batas Pendaftaran:</b> {deadline_str}\n"
         f"🏛️ <b>Sumber / Instansi:</b> {safe_organizer} ({safe_source})\n"
         f"🕒 <b>Terdeteksi:</b> {wib_time}"
         f"{snippet_block}\n"
-        f"🔗 <a href=\"{safe_url}\">Buka Link Informasi & Pendaftaran</a>\n\n"
+        f"🔗 <a href=\"{safe_url}\">Daftar / Buka Info Resmi</a>\n\n"
         f"🔎 {safe_kws}"
     )
 

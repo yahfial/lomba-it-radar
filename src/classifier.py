@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Tuple
+from typing import Optional, Tuple
 
 from src.models import CompetitionCategory
 
@@ -121,14 +121,27 @@ REGISTRATION_BOOST_KEYWORDS: list[str] = [
     r"\bprize\s+pool\b",
 ]
 
-# Post-event ceremonial news penalty (unless registration is also mentioned)
+# Post-event / completed competition news (HARD REJECT: bukan lomba yang sedang buka pendaftaran)
 POST_EVENT_CEREMONIAL_PATTERNS: list[str] = [
     r"\bpelepasan\s+kontingen\b",
     r"\bdoa\s+bersama\b",
     r"\braih\s+juara\b",
+    r"\bmeraih\s+juara\b",
     r"\bsabet\s+juara\b",
+    r"\bmenyabet\b",
     r"\bjuara\s+umum\b",
-    r"\btembus\s+semifinal\b",
+    r"\bjuara\s+(?:1|2|3|pertama|kedua|ketiga|harapan)\b",
+    r"\blolos\s+final\b",
+    r"\btembus\s+(?:final|semifinal)\b",
+    r"\bmelaju\s+ke\s+(?:final|tingkat\s+nasional)\b",
+    r"\bsukses\s+digelar\b",
+    r"\bresmi\s+ditutup\b",
+    r"\btelah\s+berakhir\b",
+    r"\bapresiasi\b",
+    r"\bantarkan\b",
+    r"\bmengantarkan\b",
+    r"\bkalahkan\b",
+    r"\bposisi\s+strategis\b",
 ]
 
 # Negative noise filters (non-IT competitions or unrelated news)
@@ -150,11 +163,40 @@ NEGATIVE_NOISE_PATTERNS: list[str] = [
 ]
 
 
+MONTHS_ID_EN = (
+    r"(?:jan(?:uari|uary)?|feb(?:ruari|ruary)?|mar(?:et|ch)?|apr(?:il)?|"
+    r"mei|may|jun(?:i|e)?|jul(?:i|y)?|agu(?:stus)?|aug(?:ust)?|"
+    r"sep(?:tember)?|okt(?:ober)?|oct(?:ober)?|nov(?:ember)?|des(?:ember)?|dec(?:ember)?)"
+)
+
+
+def extract_registration_deadline(text: str) -> Optional[str]:
+    """Extract registration deadline string from title/snippet if available."""
+    if not text:
+        return None
+
+    patterns = [
+        # e.g., "batas pendaftaran: 25 November 2026" / "deadline: 30 Nov 2026"
+        rf"(?:batas\s+(?:akhir\s+)?pendaftaran|deadline|tutup\s+pendaftaran|closed?\s+registration|registrasi\s+(?:hingga|sampai|s\.?d\.?))\s*[:\-]?\s*(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)",
+        # e.g., "hingga 25 November 2026" / "sampai 30 Nov 2026" / "s.d. 15 Des 2026"
+        rf"(?:hingga|sampai(?:\s+dengan)?|s\.?d\.?|before|until)\s+(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)",
+        # e.g., "1 - 25 November 2026" or "10–30 Nov 2026"
+        rf"\d{{1,2}}\s*[-–—]\s*(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)",
+        # Numeric date after deadline keyword: "deadline 25/11/2026" or "25-11-2026"
+        r"(?:batas\s+pendaftaran|deadline|hingga|sampai)\s*[:\-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+    ]
+    for pat in patterns:
+        match = re.search(pat, text, flags=re.IGNORECASE)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1)).strip()
+    return None
+
+
 def evaluate_competition_relevance(
     title: str, snippet: str = ""
 ) -> Tuple[bool, int, list[CompetitionCategory], list[str]]:
     """
-    Evaluate whether a scraped article/post is a valid Indonesian IT competition.
+    Evaluate whether a scraped article/post is an active/upcoming Indonesian IT competition.
 
     Returns:
         (is_valid, score, matched_categories, matched_keywords)
@@ -164,6 +206,11 @@ def evaluate_competition_relevance(
     # 1. Check hard negative filters
     for neg_pattern in NEGATIVE_NOISE_PATTERNS:
         if re.search(neg_pattern, combined_text, flags=re.IGNORECASE):
+            return False, 0, [], []
+
+    # 2. Hard-reject post-event / completed competition news
+    for post_pattern in POST_EVENT_CEREMONIAL_PATTERNS:
+        if re.search(post_pattern, combined_text, flags=re.IGNORECASE):
             return False, 0, [], []
 
     matched_categories: list[CompetitionCategory] = []
@@ -207,21 +254,23 @@ def evaluate_competition_relevance(
         score += 15
 
     # Boost if registration/open call keywords are present
+    has_registration_intent = False
     for pattern in REGISTRATION_BOOST_KEYWORDS:
         match = re.search(pattern, combined_text, flags=re.IGNORECASE)
         if match:
+            has_registration_intent = True
             score += 20
             kw = match.group(0).strip().lower()
             if kw not in matched_keywords:
                 matched_keywords.append(kw)
 
-    # Penalize ceremonial post-event news (e.g., "raih juara", "pelepasan kontingen")
-    for pattern in POST_EVENT_CEREMONIAL_PATTERNS:
-        if re.search(pattern, combined_text, flags=re.IGNORECASE):
-            score -= 18
-
     if not matched_categories and score >= 20:
         matched_categories.append(CompetitionCategory.GENERAL_IT)
 
-    is_valid = has_competition_intent and (len(matched_categories) > 0) and (score >= 25)
+    is_valid = (
+        has_competition_intent
+        and has_registration_intent
+        and (len(matched_categories) > 0)
+        and (score >= 35)
+    )
     return is_valid, score, matched_categories, matched_keywords

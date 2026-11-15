@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.classifier import evaluate_competition_relevance
+from src.classifier import evaluate_competition_relevance, extract_registration_deadline
 from src.models import CompetitionCategory, CompetitionItem, canonicalize_url
 from src.notifier import format_telegram_message
 from src.storage import RadarStorage
@@ -79,15 +79,39 @@ def test_sqlite_deduplication(tmp_path: Path) -> None:
     assert storage.count_total() == 1
 
 
+def test_classifier_rejects_post_event_completed_news() -> None:
+    post_event_cases = [
+        ("Mahasiswa UNAIR Lolos Final GEMASTIK XIX", "Inovasi pemulihan adiksi"),
+        ("Tim FILKOM Raih Juara Pertama Kompetisi UI/UX Nasional", "Berhasil mengalahkan puluhan tim"),
+        ("Pelepasan Kontingen PIMNAS dan Gemastik 2026 oleh Rektor", "Doa bersama sebelum berangkat"),
+    ]
+    for title, snippet in post_event_cases:
+        is_valid, _, _, _ = evaluate_competition_relevance(title, snippet)
+        assert is_valid is False
+
+
+def test_extract_registration_deadline() -> None:
+    text1 = "Pendaftaran Hackathon Nasional dibuka! Batas pendaftaran: 25 November 2026."
+    assert extract_registration_deadline(text1) == "25 November 2026"
+
+    text2 = "Open Registration UI/UX Competition hingga 10 Desember 2026, daftar sekarang!"
+    assert extract_registration_deadline(text2) == "10 Desember 2026"
+
+    text3 = "Kompetisi Coding Nasional tanpa info tanggal"
+    assert extract_registration_deadline(text3) is None
+
+
 def test_telegram_html_formatting() -> None:
     item = CompetitionItem(
         title="Lomba AI & Data Science <Nasional> & Hackathon",
         url="https://dicoding.com/challenges/123",
         source_name="Dicoding",
         categories=[CompetitionCategory.DATA_AI, CompetitionCategory.HACKATHON],
+        registration_deadline="30 November 2026",
         matched_keywords=["hackathon", "data science"],
     )
     msg = format_telegram_message(item)
-    assert "<b>[RADAR LOMBA IT NASIONAL BARU]</b>" in msg
+    assert "<b>[LOMBA IT NASIONAL — BUKA PENDAFTARAN]</b>" in msg
+    assert "30 November 2026" in msg
     assert "&lt;Nasional&gt; &amp; Hackathon" in msg
     assert "https://dicoding.com/challenges/123" in msg

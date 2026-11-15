@@ -39,26 +39,25 @@ class RadarConfig(BaseModel):
         default_factory=lambda: os.getenv("HTTP_PROXY", "").strip() or None
     )
 
-    # Google News RSS Search Queries (Real-time Indonesian Web Indexing)
+    # Google News RSS Search Queries (Real-time Indonesian Open Registration Indexing)
     google_news_queries: list[str] = Field(
         default_factory=lambda: [
-            '"hackathon" indonesia pendaftaran OR lomba',
-            '"lomba IT" OR "kompetisi IT" mahasiswa indonesia',
-            '"capture the flag" OR "lomba cyber security" indonesia',
-            '"lomba UI/UX" OR "UI/UX design competition" mahasiswa indonesia',
-            '"lomba data science" OR "datathon" OR "kompetisi AI" indonesia',
-            '"competitive programming" OR "lomba coding" OR "lomba pemrograman" indonesia',
-            'gemastik OR compfest OR arkavidia OR "schematics its" OR "find it ugm" OR "hology ub"',
+            '("pendaftaran" OR "dibuka" OR "open registration") ("hackathon" OR "lomba IT" OR "kompetisi IT") indonesia',
+            '("pendaftaran" OR "dibuka") ("capture the flag" OR "lomba cyber security" OR "CTF") indonesia',
+            '("pendaftaran" OR "dibuka") ("lomba UI/UX" OR "UI/UX design competition") mahasiswa indonesia',
+            '("pendaftaran" OR "dibuka") ("lomba data science" OR "datathon" OR "kompetisi AI") indonesia',
+            '("pendaftaran" OR "dibuka") ("competitive programming" OR "lomba coding" OR "lomba pemrograman") indonesia',
+            '("pendaftaran" OR "dibuka") (gemastik OR compfest OR arkavidia OR "schematics its" OR "find it ugm" OR "hology ub")',
         ]
     )
 
     # Bing News RSS Queries (Secondary Real-time Search Index)
     bing_news_queries: list[str] = Field(
         default_factory=lambda: [
-            "hackathon mahasiswa indonesia pendaftaran",
-            "lomba teknologi informasi nasional mahasiswa",
-            "kompetisi cyber security CTF indonesia",
-            "lomba UI UX design mahasiswa nasional",
+            "pendaftaran hackathon mahasiswa indonesia dibuka",
+            "pendaftaran lomba teknologi informasi nasional dibuka",
+            "pendaftaran kompetisi cyber security CTF indonesia",
+            "pendaftaran lomba UI UX design mahasiswa nasional",
         ]
     )
 

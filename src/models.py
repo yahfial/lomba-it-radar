@@ -80,6 +80,9 @@ class CompetitionItem(BaseModel):
         default_factory=lambda: [CompetitionCategory.GENERAL_IT]
     )
     organizer: str = Field(default="Penyelenggara Nasional", description="Instansi penyelenggara")
+    registration_deadline: Optional[str] = Field(
+        default=None, description="Batas akhir pendaftaran lomba yang terdeteksi"
+    )
     snippet: str = Field(default="", description="Ringkasan atau deskripsi singkat lomba")
     published_at: Optional[datetime] = Field(
         default=None, description="Waktu publikasi artikel/pengumuman"

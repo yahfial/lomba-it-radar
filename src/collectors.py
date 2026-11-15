@@ -13,7 +13,7 @@ from urllib.parse import quote_plus, urljoin
 import httpx
 from bs4 import BeautifulSoup
 
-from src.classifier import evaluate_competition_relevance
+from src.classifier import evaluate_competition_relevance, extract_registration_deadline
 from src.config import RadarConfig
 from src.models import CompetitionItem
 
@@ -126,12 +126,15 @@ class MultiSourceRadarCollector:
         if not is_valid:
             return None
 
+        deadline = extract_registration_deadline(f"{clean_title} {clean_snippet}")
+
         return CompetitionItem(
             title=clean_title,
             url=url.strip(),
             source_name=source_name,
             categories=categories,
             organizer=organizer,
+            registration_deadline=deadline,
             snippet=clean_snippet,
             published_at=published_at,
             relevance_score=score,
