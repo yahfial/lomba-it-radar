@@ -7,7 +7,9 @@ from pathlib import Path
 from src.classifier import (
     evaluate_competition_relevance,
     extract_registration_deadline,
+    is_closed_event_text,
     is_deadline_expired,
+    is_deadline_valid_and_open,
     parse_deadline_date,
 )
 from src.models import (
@@ -120,6 +122,65 @@ def test_extract_registration_deadline() -> None:
 
     text3 = "Kompetisi Coding Nasional tanpa info tanggal"
     assert extract_registration_deadline(text3) is None
+
+    # Cross-month range on infolomba.id
+    text4 = "Online | 13 Okt - 24 Nov 2026 | Diselenggarakan oleh BNCC"
+    assert extract_registration_deadline(text4) == "24 Nov 2026"
+
+    # Reverse timeline format on infolomba.id detail page
+    text5 = "TIMELINE PENTING: • 20 November 2026: Penutupan Pendaftaran • 29 November 2026: Pengumpulan"
+    assert extract_registration_deadline(text5) == "20 November 2026"
+
+    # Extended registration announcement
+    text6 = "Kompetisi Budaya Go! 2026 diperpanjang hingga 21 November 2026"
+    assert extract_registration_deadline(text6) == "21 November 2026"
+
+
+def test_mandatory_future_deadline_and_closed_event_gate(tmp_path: Path) -> None:
+    ref_today = date(2026, 11, 19)
+    # Undated ceremonial news MUST fail is_deadline_valid_and_open
+    assert is_deadline_valid_and_open(None, reference_date=ref_today) is False
+    # Expired GEMASTIK Aug 17 deadline MUST fail
+    assert is_deadline_valid_and_open("17 Agustus 2026", reference_date=ref_today) is False
+    # Active future deadlines MUST pass
+    assert is_deadline_valid_and_open("20 November 2026", reference_date=ref_today) is True
+    assert is_deadline_valid_and_open("26 November 2026", reference_date=ref_today) is True
+    assert is_deadline_valid_and_open("6 Februari 2027", reference_date=ref_today) is True
+
+    # Closed event detection
+    assert is_closed_event_text("Pendaftaran telah ditutup pada 17 Agustus 2026 dan babak final berlangsung di BINUS") is True
+    assert is_closed_event_text("UMS Hackathon seleksi 15 tim terbaik") is True
+    assert is_closed_event_text("Pendaftaran Hackathon Nasional dibuka hingga 26 November 2026") is False
+
+    # Storage active items gate excludes undated and expired rows
+    st = RadarStorage(tmp_path / "active_gate.db")
+    st.save_item(
+        CompetitionItem(
+            title="GEMASTIK XIX 2026 Buka 11 Lomba",
+            url="https://example.com/gemastik",
+            source_name="News",
+            registration_deadline=None,
+        )
+    )
+    st.save_item(
+        CompetitionItem(
+            title="Hackathon Lama 2026",
+            url="https://example.com/old",
+            source_name="Portal",
+            registration_deadline="10 Oktober 2026",
+        )
+    )
+    st.save_item(
+        CompetitionItem(
+            title="SpaceXAI Hackathon Indonesia",
+            url="https://indonesiahackathons.com/events/spacexai-hackathon-indonesia",
+            source_name="IndonesiaHackathons.com",
+            registration_deadline="6 Februari 2027",
+        )
+    )
+    active = st.get_active_items(limit=10)
+    assert len(active) == 1
+    assert active[0].title == "SpaceXAI Hackathon Indonesia"
 
 
 def test_expired_deadline_is_hard_rejected() -> None:

@@ -240,33 +240,84 @@ NEGATIVE_NOISE_PATTERNS: list[str] = [
 ]
 
 
+MONTH_NUM_TO_ID: dict[int, str] = {
+    1: "Januari",
+    2: "Februari",
+    3: "Maret",
+    4: "April",
+    5: "Mei",
+    6: "Juni",
+    7: "Juli",
+    8: "Agustus",
+    9: "September",
+    10: "Oktober",
+    11: "November",
+    12: "Desember",
+}
+
 MONTHS_ID_EN = (
     r"(?:jan(?:uari|uary)?|feb(?:ruari|ruary)?|mar(?:et|ch)?|apr(?:il)?|"
     r"mei|may|jun(?:i|e)?|jul(?:i|y)?|agu(?:stus)?|aug(?:ust)?|"
-    r"sep(?:tember)?|okt(?:ober)?|oct(?:ober)?|nov(?:ember)?|des(?:ember)?|dec(?:ember)?)"
+    r"sept?(?:ember)?|okt(?:ober)?|oct(?:ober)?|nov(?:ember)?|des(?:ember)?|dec(?:ember)?)"
 )
 
 
+def format_date_id(d: date) -> str:
+    """Format a `datetime.date` into clean Indonesian display format (e.g. '26 November 2026')."""
+    return f"{d.day} {MONTH_NUM_TO_ID[d.month]} {d.year}"
+
+
 def extract_registration_deadline(text: str) -> Optional[str]:
-    """Extract registration deadline string from title/snippet if available."""
+    """Extract registration deadline string from title/snippet/page text if available."""
     if not text:
         return None
 
     patterns = [
-        # e.g., "batas pendaftaran: 25 November 2026" / "deadline: 30 Nov 2026"
-        rf"(?:batas\s+(?:akhir\s+)?pendaftaran|deadline|tutup\s+pendaftaran|closed?\s+registration|registrasi\s+(?:hingga|sampai|s\.?d\.?))\s*[:\-]?\s*(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)",
-        # e.g., "hingga 25 November 2026" / "sampai 30 Nov 2026" / "s.d. 15 Des 2026"
+        # 1. Explicit deadline keyword BEFORE date (highest precision)
+        rf"(?:batas\s+(?:akhir\s+)?pendaftaran|penutupan\s+pendaftaran|pendaftaran\s+(?:ditutup|berakhir|tutup)(?:\s+pada)?|tutup\s+pendaftaran|close[d]?\s+registration|registration\s+deadline|deadline\s+pendaftaran|deadline|registrasi\s+(?:hingga|sampai|s\.?d\.?)|diperpanjang\s+(?:hingga|sampai(?:\s+dengan)?|s\.?d\.?))\s*[:\-]?\s*(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)",
+        # 2. Reverse timeline format: "20 November 2026: Penutupan Pendaftaran"
+        rf"(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)\s*[:\-–—]\s*(?:penutupan\s+pendaftaran|batas\s+(?:akhir\s+)?pendaftaran|tutup\s+pendaftaran|close\s+registration|deadline\s+pendaftaran)",
+        # 3. "hingga 25 November 2026" / "sampai 30 Nov 2026" / "s.d. 15 Des 2026"
         rf"(?:hingga|sampai(?:\s+dengan)?|s\.?d\.?|before|until)\s+(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)",
-        # e.g., "1 - 25 November 2026" or "10–30 Nov 2026"
+        # 4. Cross-month range: "13 Okt - 24 Nov 2026"
+        rf"\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?\s*[-–—]\s*(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)",
+        # 5. Same-month range: "1 - 25 November 2026" or "10–30 Nov 2026"
         rf"\d{{1,2}}\s*[-–—]\s*(\d{{1,2}}\s+{MONTHS_ID_EN}(?:\s+\d{{4}})?)",
-        # Numeric date after deadline keyword: "deadline 25/11/2026" or "25-11-2026"
-        r"(?:batas\s+pendaftaran|deadline|hingga|sampai)\s*[:\-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        # 6. Numeric date after deadline keyword: "deadline 25/11/2026"
+        r"(?:batas\s+(?:akhir\s+)?pendaftaran|penutupan\s+pendaftaran|deadline|hingga|sampai)\s*[:\-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
     ]
     for pat in patterns:
         match = re.search(pat, text, flags=re.IGNORECASE)
         if match:
             return re.sub(r"\s+", " ", match.group(1)).strip()
     return None
+
+
+def is_closed_event_text(text: str) -> bool:
+    """Detect whether an article/page body explicitly states registration is closed or event ended."""
+    if not text:
+        return False
+    closed_patterns = [
+        r"\bpendaftaran\s+(?:sudah|telah|resmi)\s+ditutup\b",
+        r"\bregistration\s+(?:is\s+|has\s+)?closed\b",
+        r"\bkomp(?:etisi|etition)\s+(?:telah|sudah)\s+berakhir\b",
+        r"\bbabak\s+final\s+(?:resmi\s+)?(?:dibuka|digelar|berlangsung|usai)\b",
+        r"\bclosing\s+ceremony\b",
+        r"\bseleksi\s+\d+\s+tim\b",
+        r"\blolos\s+(?:ke\s+)?(?:babak\s+)?(?:final|semifinal|\d+\s+besar)\b",
+    ]
+    return any(re.search(p, text, flags=re.IGNORECASE) for p in closed_patterns)
+
+
+def is_deadline_valid_and_open(
+    deadline_str: Optional[str], reference_date: Optional[date] = None
+) -> bool:
+    """Return True ONLY when deadline_str parses into a concrete calendar date >= today (WIB)."""
+    parsed = parse_deadline_date(deadline_str, reference_date=reference_date)
+    if parsed is None:
+        return False
+    today = reference_date or datetime.now(WIB_TZ).date()
+    return parsed >= today
 
 
 def parse_deadline_date(

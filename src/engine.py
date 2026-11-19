@@ -29,9 +29,14 @@ class RadarEngine:
         self.collector = MultiSourceRadarCollector(config)
         self.notifier = TelegramNotifier(config)
         self._scan_lock = asyncio.Lock()
+        pruned = self.storage.prune_expired_or_undated()
         removed = self.storage.deduplicate_existing_records()
-        if removed:
-            logger.info("Membersihkan %d entri lomba duplikat dari database.", removed)
+        if pruned or removed:
+            logger.info(
+                "Membersihkan %d lomba kedaluwarsa/tanpa deadline dan %d duplikat dari database.",
+                pruned,
+                removed,
+            )
 
     def _run_git(self, args: list[str], timeout: float = 15.0) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(

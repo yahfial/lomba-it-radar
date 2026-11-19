@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.classifier import is_deadline_valid_and_open, parse_deadline_date
 from src.models import (
     CompetitionCategory,
     CompetitionItem,
@@ -272,6 +273,8 @@ class RadarStorage:
             ]
 
             for r in src_rows:
+                if not is_deadline_valid_and_open(r["registration_deadline"]):
+                    continue
                 fp = str(r["fingerprint"])
                 title = str(r["title"])
                 ev_key = str(r["event_key"] or "") or extract_event_key(title)
@@ -371,3 +374,34 @@ class RadarStorage:
                 )
             )
         return items
+
+    def get_active_items(self, limit: int = 10) -> list[CompetitionItem]:
+        """Return ONLY competitions with a verified, non-expired registration deadline (>= today WIB), sorted by closest deadline."""
+        all_recent = self.get_recent_items(limit=200)
+        active = [
+            it
+            for it in all_recent
+            if is_deadline_valid_and_open(it.registration_deadline)
+        ]
+        active.sort(
+            key=lambda it: parse_deadline_date(it.registration_deadline) or datetime.max.date()
+        )
+        return active[:limit]
+
+    def prune_expired_or_undated(self) -> int:
+        """Delete legacy rows that have no verified registration deadline or whose deadline already passed."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT fingerprint, registration_deadline FROM seen_competitions;"
+            ).fetchall()
+            removed = 0
+            for row in rows:
+                dl = row["registration_deadline"]
+                if not is_deadline_valid_and_open(dl):
+                    conn.execute(
+                        "DELETE FROM seen_competitions WHERE fingerprint = ?;",
+                        (row["fingerprint"],),
+                    )
+                    removed += 1
+            conn.commit()
+            return removed

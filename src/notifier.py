@@ -218,22 +218,28 @@ class TelegramNotifier:
                 for cmd in ["/start", "/status", "/cek", "/terbaru", "status", "cek", "lomba"]
             ):
                 now_wib = datetime.now(WIB_TZ).strftime("%d %b %Y %H:%M WIB")
-                recent = storage.get_recent_items(limit=6)
+                active_items = storage.get_active_items(limit=8)
                 lines = [
                     "📡 <b>STATUS RADAR LOMBA IT 24/7: AKTIF</b>",
                     f"🕒 <b>Waktu Server:</b> {now_wib}",
-                    f"🗄️ <b>Total Lomba IT Unik Terdata:</b> {storage.count_total()} lomba",
+                    f"✅ <b>Lomba IT Aktif (Masih Buka Pendaftaran):</b> {len(active_items)} lomba",
                     "",
-                    f"🏆 <b>{len(recent)} Lomba IT Unik Terbaru yang Terdeteksi:</b>",
                 ]
-                for idx, it in enumerate(recent, start=1):
-                    dl = html.escape(it.registration_deadline or "Cek di link")
-                    t_esc = html.escape(it.title[:90])
-                    u_esc = html.escape(it.url, quote=True)
+                if not active_items:
                     lines.append(
-                        f"\n{idx}. <a href=\"{u_esc}\"><b>{t_esc}</b></a>\n"
-                        f"   ⏳ Batas: {dl} | 🏛️ {html.escape(it.source_name)}"
+                        "ℹ️ Belum ada lomba IT baru dengan tanggal batas pendaftaran aktif yang terdeteksi saat ini. Bot terus memantau 24 jam."
                     )
+                else:
+                    lines.append("🏆 <b>Daftar Lomba IT Nasional yang Masih Buka Pendaftaran:</b>")
+                    for idx, it in enumerate(active_items, start=1):
+                        dl = html.escape(it.registration_deadline or "-")
+                        t_esc = html.escape(it.title[:95])
+                        u_esc = html.escape(it.url, quote=True)
+                        lines.append(
+                            f"\n{idx}. <a href=\"{u_esc}\"><b>{t_esc}</b></a>\n"
+                            f"   ⏳ <b>Batas Pendaftaran:</b> {dl}\n"
+                            f"   🏛️ {html.escape(it.source_name)}"
+                        )
                 lines.append(
                     "\n💡 <i>Perintah: /cek • /status • /terbaru • /scan</i>"
                 )
