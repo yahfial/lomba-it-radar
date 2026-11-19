@@ -51,6 +51,11 @@ def test_classifier_rejects_non_it_noise() -> None:
         ("Lomba Mewarnai dan Menggambar Anak Tingkat Nasional", "Hadiah piala bergilir"),
         ("Lomba Mancing Ikan Mas Akhir Pekan", "Pendaftaran terbuka untuk umum"),
         ("Lowongan Kerja Admin Gudang Jakarta", "Syarat minimal SMA/SMK"),
+        ("Lomba Menulis Surat untuk Ibu Pertiwi 2026 Gratis, Hadiah Rp237 Juta", "Deadline: 12 Desember 2026 literasi dan kebudayaan"),
+        ("Lomba Kaligrafi Arab POSCA 2027 Gratis, Hadiah Uang Tunai Rp5 Juta", "Deadline: 31 Januari 2027 seni kaligrafi dan desain dekoratif"),
+        ("ITB Insight 2026 Digelar 28 November di Kampus Ganesha, Registrasi Gratis untuk Umum", "Acara pengenalan kampus ITB"),
+        ("TI Usakti sukses gelar Kompetisi Rekayasa Kualitas Tingkat Nasional IX", "Teknik Industri Usakti"),
+        ("Lomba Desain Poster Hari AIDS Sedunia 2026 Gratis untuk Umum", "Hadiah jutaan rupiah"),
     ]
     for title, snippet in noise_cases:
         is_valid, _, _, _ = evaluate_competition_relevance(title, snippet)

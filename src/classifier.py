@@ -48,36 +48,41 @@ MONTH_NAME_TO_NUM: dict[str, int] = {
     "december": 12,
 }
 
-# Category keyword mapping (Indonesian & English terms)
+# Category keyword mapping (Strict IT-only terms)
 CATEGORY_PATTERNS: dict[CompetitionCategory, list[str]] = {
     CompetitionCategory.HACKATHON: [
         r"\bhackathon\b",
         r"\bsoftware\s+development\b",
         r"\bweb\s+dev(?:elopment)?\b",
+        r"\bweb\s+design\b",
         r"\bmobile\s+dev(?:elopment)?\b",
         r"\bapp(?:lication)?\s+development\b",
-        r"\blomba\s+web\b",
-        r"\blomba\s+aplikasi\b",
-        r"\binovasi\s+digital\b",
-        r"\biot\b",
+        r"\bpengembangan\s+(?:aplikasi|perangkat\s+lunak|software|web)\b",
+        r"\blomba\s+(?:web|website|aplikasi|software|iot)\b",
+        r"\bkompetisi\s+(?:web|website|aplikasi|software|iot)\b",
         r"\binternet\s+of\s+things\b",
         r"\bgame\s+dev(?:elopment)?\b",
+        r"\bpembuatan\s+(?:aplikasi|website|game|sistem\s+informasi)\b",
     ],
     CompetitionCategory.CYBERSECURITY: [
         r"\bctf\b",
         r"\bcapture\s+the\s+flag\b",
         r"\bcyber\s*security\b",
         r"\bkeamanan\s+siber\b",
+        r"\bketahanan\s+siber\b",
         r"\bpentest(?:ing)?\b",
         r"\bbug\s+bounty\b",
         r"\binformation\s+security\b",
         r"\bforensik\s+digital\b",
+        r"\bcyber\s+jawara\b",
     ],
     CompetitionCategory.DATA_AI: [
         r"\bdata\s+science\b",
         r"\bdatathon\b",
         r"\bmachine\s+learning\b",
+        r"\bdeep\s+learning\b",
         r"\bartificial\s+intelligence\b",
+        r"\bkecerdasan\s+buatan\b",
         r"\blomba\s+ai\b",
         r"\bkompetisi\s+ai\b",
         r"\bgen\s*ai\b",
@@ -88,7 +93,8 @@ CATEGORY_PATTERNS: dict[CompetitionCategory, list[str]] = {
     CompetitionCategory.UI_UX: [
         r"\bui\s*/?\s*ux\b",
         r"\bux\s+design\b",
-        r"\bproduct\s+design\b",
+        r"\bui\s+design\b",
+        r"\bdigital\s+product\s+design\b",
         r"\bdesain\s+antarmuka\b",
         r"\bdesain\s+aplikasi\b",
         r"\bit\s+business\s+case\b",
@@ -99,30 +105,35 @@ CATEGORY_PATTERNS: dict[CompetitionCategory, list[str]] = {
         r"\blomba\s+coding\b",
         r"\blomba\s+koding\b",
         r"\blomba\s+pemrograman\b",
-        r"\balgoritma\b",
+        r"\bkompetisi\s+(?:coding|pemrograman)\b",
+        r"\b(?:algoritma|pemrograman)\s+kompetitif\b",
         r"\bicpc\b",
     ],
 }
 
-# General IT & National prestige competition triggers
+# General IT & National prestige IT competition triggers
 PRESTIGE_IT_KEYWORDS: list[str] = [
     r"\bgemastik\b",
     r"\bcompfest\b",
     r"\barkavidia\b",
-    r"\bschematics\b",
-    r"\bfind\s*it\b",
+    r"\bschematics\s+its\b",
+    r"\bfind\s*it\s+ugm\b",
+    r"\bjoints\s+ugm\b",
     r"\bmage\s+its\b",
-    r"\bhology\b",
-    r"\bit\s+today\b",
+    r"\bhology\s+ub\b",
+    r"\bit\s+today\s+ipb\b",
     r"\btechnofest\b",
-    r"\binfest\b",
+    r"\btechphoria\b",
+    r"\bifest\b",
     r"\bdicoding\s+challenge\b",
     r"\blomba\s+it\b",
     r"\bkompetisi\s+it\b",
-    r"\blomba\s+teknologi\b",
-    r"\bkompetisi\s+teknologi\b",
+    r"\blomba\s+(?:tik|teknologi\s+informasi)\b",
+    r"\bkompetisi\s+(?:tik|teknologi\s+informasi)\b",
+    r"\bkompetisi\s+teknologi\s+digital\b",
     r"\blomba\s+informatika\b",
     r"\bolimpiade\s+informatika\b",
+    r"\bkomputasi\b",
 ]
 
 # Competition action indicators (must indicate an actual competition/challenge/registration)
@@ -347,12 +358,14 @@ def evaluate_competition_relevance(
     matched_categories: list[CompetitionCategory] = []
     matched_keywords: list[str] = []
     score = 0
+    has_it_domain_match = False
 
-    # 2. Match specific IT competition categories
+    # 4. Match specific IT competition categories
     for category, patterns in CATEGORY_PATTERNS.items():
         for pattern in patterns:
             match = re.search(pattern, combined_text, flags=re.IGNORECASE)
             if match:
+                has_it_domain_match = True
                 if category not in matched_categories:
                     matched_categories.append(category)
                 kw = match.group(0).strip().lower()
@@ -360,16 +373,23 @@ def evaluate_competition_relevance(
                     matched_keywords.append(kw)
                 score += 15
 
-    # 3. Match prestige event & general IT competition keywords
+    # 5. Match prestige IT event & general IT competition keywords
+    has_prestige_it_match = False
     for pattern in PRESTIGE_IT_KEYWORDS:
         match = re.search(pattern, combined_text, flags=re.IGNORECASE)
         if match:
+            has_it_domain_match = True
+            has_prestige_it_match = True
             kw = match.group(0).strip().lower()
             if kw not in matched_keywords:
                 matched_keywords.append(kw)
             score += 20
 
-    # 4. Verify competition action context
+    # HARD REQUIREMENT: Must explicitly match at least one IT/Tech competition keyword
+    if not has_it_domain_match:
+        return False, 0, [], []
+
+    # 6. Verify competition action context
     has_competition_intent = False
     for pattern in COMPETITION_ACTION_KEYWORDS:
         if re.search(pattern, combined_text, flags=re.IGNORECASE):
@@ -384,7 +404,7 @@ def evaluate_competition_relevance(
     ):
         score += 15
 
-    # Boost if registration/open call keywords are present
+    # 7. Boost if registration/open call keywords are present
     has_registration_intent = False
     for pattern in REGISTRATION_BOOST_KEYWORDS:
         match = re.search(pattern, combined_text, flags=re.IGNORECASE)
@@ -395,11 +415,12 @@ def evaluate_competition_relevance(
             if kw not in matched_keywords:
                 matched_keywords.append(kw)
 
-    if not matched_categories and score >= 20:
+    if not matched_categories and has_prestige_it_match:
         matched_categories.append(CompetitionCategory.GENERAL_IT)
 
     is_valid = (
-        has_competition_intent
+        has_it_domain_match
+        and has_competition_intent
         and has_registration_intent
         and (len(matched_categories) > 0)
         and (score >= 35)
