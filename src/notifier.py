@@ -222,9 +222,9 @@ class TelegramNotifier:
                 lines = [
                     "📡 <b>STATUS RADAR LOMBA IT 24/7: AKTIF</b>",
                     f"🕒 <b>Waktu Server:</b> {now_wib}",
-                    f"🗄️ <b>Total Lomba Terdata:</b> {storage.count_total()} lomba",
+                    f"🗄️ <b>Total Lomba IT Unik Terdata:</b> {storage.count_total()} lomba",
                     "",
-                    "🏆 <b>6 Lomba IT &amp; Inovasi Terbaru yang Terdeteksi:</b>",
+                    f"🏆 <b>{len(recent)} Lomba IT Unik Terbaru yang Terdeteksi:</b>",
                 ]
                 for idx, it in enumerate(recent, start=1):
                     dl = html.escape(it.registration_deadline or "Cek di link")

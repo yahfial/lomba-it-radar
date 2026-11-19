@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import subprocess
+import sys
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 from src.collectors import MultiSourceRadarCollector
 from src.config import RadarConfig
@@ -12,6 +17,7 @@ from src.notifier import TelegramNotifier
 from src.storage import RadarStorage
 
 logger = logging.getLogger("lomba_radar.engine")
+WIN_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 class RadarEngine:
@@ -23,6 +29,68 @@ class RadarEngine:
         self.collector = MultiSourceRadarCollector(config)
         self.notifier = TelegramNotifier(config)
         self._scan_lock = asyncio.Lock()
+        removed = self.storage.deduplicate_existing_records()
+        if removed:
+            logger.info("Membersihkan %d entri lomba duplikat dari database.", removed)
+
+    def _run_git(self, args: list[str], timeout: float = 15.0) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            timeout=timeout,
+            creationflags=WIN_NO_WINDOW,
+        )
+
+    async def _sync_remote_history_before_scan(self) -> None:
+        """Pull remote DB rows from GitHub origin/main into local SQLite to avoid cross-runner duplicates."""
+        if os.getenv("GITHUB_ACTIONS"):
+            return
+        try:
+            res = await asyncio.to_thread(self._run_git, ["fetch", "origin", "main", "--quiet"], 15.0)
+            if res.returncode != 0:
+                return
+            blob = await asyncio.to_thread(
+                self._run_git, ["show", "origin/main:data/radar_history.db"], 10.0
+            )
+            if blob.returncode != 0 or not blob.stdout:
+                return
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+                tf.write(blob.stdout)
+                tmp_path = Path(tf.name)
+            try:
+                merged = self.storage.merge_from_sqlite(tmp_path)
+                if merged:
+                    logger.info("Sinkronisasi %d lomba baru dari cloud GitHub ke DB lokal.", merged)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.debug("Lewati sinkronisasi remote DB: %s", exc)
+
+    async def _push_local_history_after_notify(self) -> None:
+        """Push updated data/radar_history.db to origin/main if working tree has only DB changes."""
+        if os.getenv("GITHUB_ACTIONS"):
+            return
+        try:
+            st = await asyncio.to_thread(self._run_git, ["status", "--porcelain"], 10.0)
+            if st.returncode != 0:
+                return
+            changed_files = [
+                line[3:].strip()
+                for line in st.stdout.decode("utf-8", errors="ignore").splitlines()
+                if line.strip()
+            ]
+            if changed_files != ["data/radar_history.db"]:
+                return
+            await asyncio.to_thread(self._run_git, ["add", "data/radar_history.db"], 10.0)
+            commit_res = await asyncio.to_thread(
+                self._run_git,
+                ["commit", "-m", "chore(radar): sync local seen competitions [skip ci]"],
+                10.0,
+            )
+            if commit_res.returncode == 0:
+                await asyncio.to_thread(self._run_git, ["push", "origin", "main", "--quiet"], 20.0)
+        except Exception as exc:
+            logger.debug("Lewati push DB lokal ke cloud: %s", exc)
 
     async def run_single_scan(
         self, max_notify_per_cycle: int = 15, process_commands: bool = True
@@ -32,6 +100,7 @@ class RadarEngine:
             started_at = datetime.now(timezone.utc)
             logger.info("Memulai pemindaian Radar Lomba IT Nasional...")
 
+            await self._sync_remote_history_before_scan()
             candidates, errors = await self.collector.collect_all()
             new_items_count = 0
             notified_count = 0
@@ -58,6 +127,9 @@ class RadarEngine:
                         self.storage.mark_notified(item.fingerprint)
                         notified_count += 1
                         await asyncio.sleep(1.2)  # Prevent Telegram flood limits
+
+            if new_items_count > 0:
+                await self._push_local_history_after_notify()
 
             # Process any incoming Telegram commands when running in --once / GitHub Actions mode
             if process_commands and self.config.is_telegram_configured:

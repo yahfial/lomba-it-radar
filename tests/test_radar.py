@@ -10,7 +10,12 @@ from src.classifier import (
     is_deadline_expired,
     parse_deadline_date,
 )
-from src.models import CompetitionCategory, CompetitionItem, canonicalize_url
+from src.models import (
+    CompetitionCategory,
+    CompetitionItem,
+    are_same_competition,
+    canonicalize_url,
+)
 from src.notifier import format_telegram_message
 from src.storage import RadarStorage
 
@@ -163,3 +168,85 @@ def test_telegram_html_formatting() -> None:
     assert "30 November 2026" in msg
     assert "&lt;Nasional&gt; &amp; Hackathon" in msg
     assert "https://dicoding.com/challenges/123" in msg
+
+
+def test_semantic_event_deduplication_same_competition() -> None:
+    # 1. Exact duplicate GEMASTIK variants from user screenshot
+    assert are_same_competition(
+        "GEMASTIK XIX 2026 Buka 11 Lomba untuk Talenta Digital",
+        "GEMASTIK 2026 Digelar, Incar Talenta Digital di 11 Cabang Lomba",
+    ) is True
+    assert are_same_competition(
+        "GEMASTIK XIX 2026 Buka 11 Lomba untuk Talenta Digital",
+        "GEMASTIK XIX 2026 Resmi Dibuka di BINUS University Alam Sutera, Perlombakan 11 Cabang Inovasi - Akurat Jakarta",
+    ) is True
+
+    # 2. Exact duplicate UMS Health Innovation Hackathon variants from user screenshot
+    assert are_same_competition(
+        "UMSHealth Innovation Hackathon 2026 Dibuka, Tantang Peserta Ciptakan Solusi Halaman all - Kompasiana.com",
+        "Health Innovation Hackathon 2026 UMS Dibuka, Gaet Inovator Lintas Ilmu Berhadiah Ratusan Juta Rupiah - PWM Jateng",
+    ) is True
+    assert are_same_competition(
+        "Health Innovation Hackathon 2026 UMS Dibuka, Gaet Inovator Lintas Ilmu Berhadiah Ratusan Juta Rupiah - PWM Jateng",
+        "Pendaftaran UMS Health Innovation Hackathon 2026 Resmi Dibuka, Peserta Ditantang Hadirkan Solusi Kesehatan - PWM Jateng",
+    ) is True
+
+    # 3. Distinct competitions MUST NOT be merged
+    assert are_same_competition(
+        "BRI FinTech Hackathon 2026 Dibuka",
+        "Mandiri FinTech Hackathon 2026 Dibuka",
+    ) is False
+    assert are_same_competition(
+        "Shopee Code League 2026 Dibuka",
+        "BRI Code League 2026 Dibuka",
+    ) is False
+    assert are_same_competition(
+        "GEMASTIK XIX 2026 Buka 11 Lomba",
+        "GEMASTIK XX 2027 Buka 11 Lomba",
+    ) is False
+
+
+def test_storage_deduplicates_cross_media_articles(tmp_path: Path) -> None:
+    storage = RadarStorage(tmp_path / "dedup_events.db")
+
+    gemastik_1 = CompetitionItem(
+        title="GEMASTIK XIX 2026 Buka 11 Lomba untuk Talenta Digital",
+        url="https://journalarta.com/news/gemastik",
+        source_name="Bing Web Radar ID",
+        relevance_score=80,
+    )
+    gemastik_2 = CompetitionItem(
+        title="GEMASTIK 2026 Digelar, Incar Talenta Digital di 11 Cabang Lomba",
+        url="https://inet.detik.com/gemastik-2026",
+        source_name="Google Radar (detikInet)",
+        relevance_score=60,
+    )
+    ums_1 = CompetitionItem(
+        title="Pendaftaran UMS Health Innovation Hackathon 2026 Resmi Dibuka - News UMS",
+        url="https://news.ums.ac.id/hackathon",
+        source_name="Google Radar (News UMS)",
+        relevance_score=75,
+    )
+    ums_2 = CompetitionItem(
+        title="UMSHealth Innovation Hackathon 2026 Dibuka, Tantang Peserta Ciptakan Solusi - Kompasiana.com",
+        url="https://kompasiana.com/umshealth",
+        source_name="Google Radar (Kompasiana.com)",
+        relevance_score=55,
+    )
+
+    assert storage.is_seen(gemastik_1) is False
+    storage.save_item(gemastik_1, notified=True)
+    # Different URL & different headline for the SAME event MUST be seen!
+    assert storage.is_seen(gemastik_2) is True
+
+    assert storage.is_seen(ums_1) is False
+    storage.save_item(ums_1, notified=True)
+    assert storage.is_seen(ums_2) is True
+
+    # Simulate legacy duplicate rows already in DB and verify cleanup collapses them
+    storage.save_item(gemastik_2, notified=True)
+    storage.save_item(ums_2, notified=True)
+    assert storage.count_total() == 4
+    removed = storage.deduplicate_existing_records()
+    assert removed == 2
+    assert storage.count_total() == 2

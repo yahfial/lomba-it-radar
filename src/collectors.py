@@ -19,7 +19,7 @@ from src.classifier import (
     is_deadline_expired,
 )
 from src.config import RadarConfig
-from src.models import CompetitionItem
+from src.models import CompetitionItem, are_same_competition
 
 logger = logging.getLogger("lomba_radar.collectors")
 
@@ -376,13 +376,26 @@ class MultiSourceRadarCollector:
                 except Exception as exc:
                     errors.append(f"Telegram({channel}): {exc}")
 
-        # In-memory deduplication by fingerprint & title_fingerprint
-        unique_map: dict[str, CompetitionItem] = {}
+        # In-memory semantic deduplication (1 announcement per distinct competition event)
+        # Prefer entries that include a concrete registration deadline & higher relevance score
+        ranked_candidates = sorted(
+            all_candidates,
+            key=lambda x: (1 if x.registration_deadline else 0, x.relevance_score),
+            reverse=True,
+        )
+        deduped_items: list[CompetitionItem] = []
+        seen_fingerprints: set[str] = set()
         seen_titles: set[str] = set()
-        for item in sorted(all_candidates, key=lambda x: x.relevance_score, reverse=True):
-            if item.fingerprint in unique_map or item.title_fingerprint in seen_titles:
+        for item in ranked_candidates:
+            if item.fingerprint in seen_fingerprints or item.title_fingerprint in seen_titles:
                 continue
-            unique_map[item.fingerprint] = item
+            if any(
+                are_same_competition(item.title, existing.title, item.event_key, existing.event_key)
+                for existing in deduped_items
+            ):
+                continue
+            deduped_items.append(item)
+            seen_fingerprints.add(item.fingerprint)
             seen_titles.add(item.title_fingerprint)
 
-        return list(unique_map.values()), errors
+        return deduped_items, errors

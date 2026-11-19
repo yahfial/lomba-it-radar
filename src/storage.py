@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from src.models import CompetitionCategory, CompetitionItem
+from src.models import (
+    CompetitionCategory,
+    CompetitionItem,
+    are_same_competition,
+    extract_event_key,
+)
 
 
 class RadarStorage:
@@ -32,6 +37,7 @@ class RadarStorage:
                 CREATE TABLE IF NOT EXISTS seen_competitions (
                     fingerprint TEXT PRIMARY KEY,
                     title_fingerprint TEXT NOT NULL,
+                    event_key TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL,
                     url TEXT NOT NULL,
                     source_name TEXT NOT NULL,
@@ -44,12 +50,14 @@ class RadarStorage:
                 );
                 """
             )
-            try:
-                conn.execute(
-                    "ALTER TABLE seen_competitions ADD COLUMN registration_deadline TEXT;"
-                )
-            except sqlite3.OperationalError:
-                pass
+            for alter_sql in (
+                "ALTER TABLE seen_competitions ADD COLUMN registration_deadline TEXT;",
+                "ALTER TABLE seen_competitions ADD COLUMN event_key TEXT NOT NULL DEFAULT '';",
+            ):
+                try:
+                    conn.execute(alter_sql)
+                except sqlite3.OperationalError:
+                    pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS bot_meta (
@@ -62,6 +70,12 @@ class RadarStorage:
                 """
                 CREATE INDEX IF NOT EXISTS idx_title_fingerprint
                 ON seen_competitions (title_fingerprint);
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_event_key
+                ON seen_competitions (event_key);
                 """
             )
             conn.commit()
@@ -82,7 +96,12 @@ class RadarStorage:
             conn.commit()
 
     def is_seen(self, item: CompetitionItem) -> bool:
-        """Check if competition has already been recorded by URL+title or identical normalized title."""
+        """
+        Check whether this competition event has ALREADY been reported, using:
+        1. Exact URL+title fingerprint or title_fingerprint
+        2. Canonical flagship event_key (e.g. 'event::gemastik::2026')
+        3. Semantic/fuzzy event similarity against previously stored titles
+        """
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -92,7 +111,38 @@ class RadarStorage:
                 """,
                 (item.fingerprint, item.title_fingerprint),
             )
-            return cursor.fetchone() is not None
+            if cursor.fetchone() is not None:
+                return True
+
+            if item.event_key:
+                ev_cur = conn.execute(
+                    """
+                    SELECT 1 FROM seen_competitions
+                    WHERE event_key = ?
+                    LIMIT 1;
+                    """,
+                    (item.event_key,),
+                )
+                if ev_cur.fetchone() is not None:
+                    return True
+
+            rows = conn.execute(
+                """
+                SELECT title, event_key FROM seen_competitions
+                ORDER BY discovered_at DESC
+                LIMIT 500;
+                """
+            ).fetchall()
+
+        for row in rows:
+            existing_title = str(row["title"])
+            existing_key = str(row["event_key"] or "") or extract_event_key(existing_title)
+            if are_same_competition(
+                item.title, existing_title, item.event_key, existing_key
+            ):
+                return True
+
+        return False
 
     def save_item(self, item: CompetitionItem, notified: bool = False) -> None:
         """Persist a competition item into SQLite."""
@@ -108,6 +158,7 @@ class RadarStorage:
                 INSERT OR REPLACE INTO seen_competitions (
                     fingerprint,
                     title_fingerprint,
+                    event_key,
                     title,
                     url,
                     source_name,
@@ -117,11 +168,12 @@ class RadarStorage:
                     published_at,
                     discovered_at,
                     notified
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     item.fingerprint,
                     item.title_fingerprint,
+                    item.event_key,
                     item.title,
                     item.url,
                     item.source_name,
@@ -134,6 +186,130 @@ class RadarStorage:
                 ),
             )
             conn.commit()
+
+    def deduplicate_existing_records(self) -> int:
+        """
+        Remove semantic duplicates already present in seen_competitions, keeping the
+        single best entry (with deadline & highest score) per distinct competition event.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT fingerprint, title, event_key, relevance_score,
+                       registration_deadline, discovered_at
+                FROM seen_competitions
+                ORDER BY
+                    CASE WHEN registration_deadline IS NOT NULL AND registration_deadline != '' THEN 1 ELSE 0 END DESC,
+                    relevance_score DESC,
+                    discovered_at ASC;
+                """
+            ).fetchall()
+
+            kept: list[tuple[str, str]] = []
+            to_delete: list[str] = []
+
+            for row in rows:
+                fp = str(row["fingerprint"])
+                title = str(row["title"])
+                ev_key = str(row["event_key"] or "") or extract_event_key(title)
+
+                # Backfill canonical event_key if missing
+                if ev_key and not row["event_key"]:
+                    conn.execute(
+                        "UPDATE seen_competitions SET event_key = ? WHERE fingerprint = ?;",
+                        (ev_key, fp),
+                    )
+
+                if any(
+                    are_same_competition(title, k_title, ev_key, k_key)
+                    for k_title, k_key in kept
+                ):
+                    to_delete.append(fp)
+                else:
+                    kept.append((title, ev_key))
+
+            for fp in to_delete:
+                conn.execute("DELETE FROM seen_competitions WHERE fingerprint = ?;", (fp,))
+
+            conn.commit()
+            return len(to_delete)
+
+    def merge_from_sqlite(self, other_db_path: Path) -> int:
+        """Merge competition rows from another SQLite snapshot (e.g., origin/main) without duplicates."""
+        if not other_db_path.exists():
+            return 0
+        merged = 0
+        src_conn = sqlite3.connect(str(other_db_path), timeout=10.0)
+        src_conn.row_factory = sqlite3.Row
+        try:
+            cols = {
+                r["name"]
+                for r in src_conn.execute("PRAGMA table_info(seen_competitions);").fetchall()
+            }
+            select_deadline = "registration_deadline" if "registration_deadline" in cols else "NULL AS registration_deadline"
+            select_evkey = "event_key" if "event_key" in cols else "'' AS event_key"
+            src_rows = src_conn.execute(
+                f"""
+                SELECT fingerprint, title_fingerprint, {select_evkey}, title, url,
+                       source_name, categories_json, relevance_score,
+                       {select_deadline}, published_at, discovered_at, notified
+                FROM seen_competitions;
+                """
+            ).fetchall()
+        except sqlite3.Error:
+            return 0
+        finally:
+            src_conn.close()
+
+        with self._connect() as dst_conn:
+            existing_rows = dst_conn.execute(
+                "SELECT fingerprint, title, event_key FROM seen_competitions;"
+            ).fetchall()
+            existing_fps = {str(r["fingerprint"]) for r in existing_rows}
+            existing_events = [
+                (str(r["title"]), str(r["event_key"] or "") or extract_event_key(str(r["title"])))
+                for r in existing_rows
+            ]
+
+            for r in src_rows:
+                fp = str(r["fingerprint"])
+                title = str(r["title"])
+                ev_key = str(r["event_key"] or "") or extract_event_key(title)
+                if fp in existing_fps:
+                    continue
+                if any(
+                    are_same_competition(title, e_title, ev_key, e_key)
+                    for e_title, e_key in existing_events
+                ):
+                    continue
+                dst_conn.execute(
+                    """
+                    INSERT OR IGNORE INTO seen_competitions (
+                        fingerprint, title_fingerprint, event_key, title, url,
+                        source_name, categories_json, relevance_score,
+                        registration_deadline, published_at, discovered_at, notified
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        fp,
+                        str(r["title_fingerprint"]),
+                        ev_key,
+                        title,
+                        str(r["url"]),
+                        str(r["source_name"]),
+                        str(r["categories_json"]),
+                        int(r["relevance_score"]),
+                        r["registration_deadline"],
+                        r["published_at"],
+                        str(r["discovered_at"]),
+                        int(r["notified"]),
+                    ),
+                )
+                existing_fps.add(fp)
+                existing_events.append((title, ev_key))
+                merged += 1
+            dst_conn.commit()
+        return merged
 
     def mark_notified(self, fingerprint: str) -> None:
         """Mark a stored item as notified via Telegram."""
