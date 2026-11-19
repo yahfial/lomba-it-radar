@@ -309,51 +309,85 @@ def is_closed_event_text(text: str) -> bool:
     return any(re.search(p, text, flags=re.IGNORECASE) for p in closed_patterns)
 
 
-def is_deadline_valid_and_open(
+def days_until_deadline(
     deadline_str: Optional[str], reference_date: Optional[date] = None
-) -> bool:
-    """Return True ONLY when deadline_str parses into a concrete calendar date >= today (WIB)."""
+) -> Optional[int]:
+    """Return number of days remaining until deadline_str (0 = today, 20 = H-20, <0 = expired)."""
     parsed = parse_deadline_date(deadline_str, reference_date=reference_date)
     if parsed is None:
-        return False
+        return None
     today = reference_date or datetime.now(WIB_TZ).date()
-    return parsed >= today
+    return (parsed - today).days
+
+
+def is_deadline_valid_and_open(
+    deadline_str: Optional[str],
+    min_days_ahead: int = 0,
+    reference_date: Optional[date] = None,
+) -> bool:
+    """
+    Return True ONLY when deadline_str parses into a concrete calendar date
+    at least `min_days_ahead` days from today (e.g., min_days_ahead=20 means >= H-20).
+    """
+    remaining = days_until_deadline(deadline_str, reference_date=reference_date)
+    if remaining is None:
+        return False
+    return remaining >= min_days_ahead
+
+
+def _resolve_month_number(month_raw: str) -> Optional[int]:
+    lowered = month_raw.lower()
+    if lowered in MONTH_NAME_TO_NUM:
+        return MONTH_NAME_TO_NUM[lowered]
+    for k, v in MONTH_NAME_TO_NUM.items():
+        if lowered.startswith(k):
+            return v
+    return None
 
 
 def parse_deadline_date(
     deadline_str: Optional[str], reference_date: Optional[date] = None
 ) -> Optional[date]:
-    """Parse an Indonesian/English deadline string into a concrete `datetime.date`."""
+    """Parse Indonesian ('13 November 2026') or English ('Jan 12, 2027') deadline into `datetime.date`."""
     if not deadline_str:
         return None
 
     today = reference_date or datetime.now(WIB_TZ).date()
     cleaned = deadline_str.strip().lower()
 
-    # 1. Text month format: "13 november 2026" or "13 nov"
-    m_text = re.search(
+    # 1. Indonesian / DMY text format: "13 november 2026" or "13 nov"
+    m_dmy = re.search(
         rf"(\d{{1,2}})\s+({MONTHS_ID_EN})(?:\s+(\d{{4}}))?",
         cleaned,
         flags=re.IGNORECASE,
     )
-    if m_text:
-        day_num = int(m_text.group(1))
-        month_raw = m_text.group(2).lower()
-        month_num = MONTH_NAME_TO_NUM.get(month_raw)
-        if not month_num:
-            # prefix fallback
-            for k, v in MONTH_NAME_TO_NUM.items():
-                if month_raw.startswith(k):
-                    month_num = v
-                    break
-        year_num = int(m_text.group(3)) if m_text.group(3) else today.year
+    if m_dmy:
+        day_num = int(m_dmy.group(1))
+        month_num = _resolve_month_number(m_dmy.group(2))
+        year_num = int(m_dmy.group(3)) if m_dmy.group(3) else today.year
         if month_num:
             try:
                 return date(year_num, month_num, day_num)
             except ValueError:
                 return None
 
-    # 2. Numeric format: "25/11/2026" or "25-11-26"
+    # 2. English / MDY text format: "Jan 12, 2027" or "Dec 11, 2026" or "Feb 01 2027"
+    m_mdy = re.search(
+        rf"({MONTHS_ID_EN})\s+(\d{{1,2}})(?:,?\s+(\d{{4}}))?",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if m_mdy:
+        month_num = _resolve_month_number(m_mdy.group(1))
+        day_num = int(m_mdy.group(2))
+        year_num = int(m_mdy.group(3)) if m_mdy.group(3) else today.year
+        if month_num:
+            try:
+                return date(year_num, month_num, day_num)
+            except ValueError:
+                return None
+
+    # 3. Numeric format: "25/11/2026" or "25-11-26"
     m_num = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", cleaned)
     if m_num:
         day_num = int(m_num.group(1))

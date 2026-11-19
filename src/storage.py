@@ -42,6 +42,7 @@ class RadarStorage:
                     title TEXT NOT NULL,
                     url TEXT NOT NULL,
                     source_name TEXT NOT NULL,
+                    scope TEXT NOT NULL DEFAULT 'Nasional (Indonesia)',
                     categories_json TEXT NOT NULL,
                     relevance_score INTEGER NOT NULL DEFAULT 0,
                     registration_deadline TEXT,
@@ -54,6 +55,7 @@ class RadarStorage:
             for alter_sql in (
                 "ALTER TABLE seen_competitions ADD COLUMN registration_deadline TEXT;",
                 "ALTER TABLE seen_competitions ADD COLUMN event_key TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE seen_competitions ADD COLUMN scope TEXT NOT NULL DEFAULT 'Nasional (Indonesia)';",
             ):
                 try:
                     conn.execute(alter_sql)
@@ -163,13 +165,14 @@ class RadarStorage:
                     title,
                     url,
                     source_name,
+                    scope,
                     categories_json,
                     relevance_score,
                     registration_deadline,
                     published_at,
                     discovered_at,
                     notified
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     item.fingerprint,
@@ -178,6 +181,7 @@ class RadarStorage:
                     item.title,
                     item.url,
                     item.source_name,
+                    item.scope,
                     json.dumps(categories_list, ensure_ascii=False),
                     item.relevance_score,
                     item.registration_deadline,
@@ -235,7 +239,7 @@ class RadarStorage:
             conn.commit()
             return len(to_delete)
 
-    def merge_from_sqlite(self, other_db_path: Path) -> int:
+    def merge_from_sqlite(self, other_db_path: Path, min_days_ahead: int = 0) -> int:
         """Merge competition rows from another SQLite snapshot (e.g., origin/main) without duplicates."""
         if not other_db_path.exists():
             return 0
@@ -249,10 +253,11 @@ class RadarStorage:
             }
             select_deadline = "registration_deadline" if "registration_deadline" in cols else "NULL AS registration_deadline"
             select_evkey = "event_key" if "event_key" in cols else "'' AS event_key"
+            select_scope = "scope" if "scope" in cols else "'Nasional (Indonesia)' AS scope"
             src_rows = src_conn.execute(
                 f"""
                 SELECT fingerprint, title_fingerprint, {select_evkey}, title, url,
-                       source_name, categories_json, relevance_score,
+                       source_name, {select_scope}, categories_json, relevance_score,
                        {select_deadline}, published_at, discovered_at, notified
                 FROM seen_competitions;
                 """
@@ -273,7 +278,9 @@ class RadarStorage:
             ]
 
             for r in src_rows:
-                if not is_deadline_valid_and_open(r["registration_deadline"]):
+                if not is_deadline_valid_and_open(
+                    r["registration_deadline"], min_days_ahead=min_days_ahead
+                ):
                     continue
                 fp = str(r["fingerprint"])
                 title = str(r["title"])
@@ -289,9 +296,9 @@ class RadarStorage:
                     """
                     INSERT OR IGNORE INTO seen_competitions (
                         fingerprint, title_fingerprint, event_key, title, url,
-                        source_name, categories_json, relevance_score,
+                        source_name, scope, categories_json, relevance_score,
                         registration_deadline, published_at, discovered_at, notified
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         fp,
@@ -300,6 +307,7 @@ class RadarStorage:
                         title,
                         str(r["url"]),
                         str(r["source_name"]),
+                        str(r["scope"] or "Nasional (Indonesia)"),
                         str(r["categories_json"]),
                         int(r["relevance_score"]),
                         r["registration_deadline"],
@@ -335,7 +343,7 @@ class RadarStorage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT title, url, source_name, categories_json, relevance_score,
+                SELECT title, url, source_name, scope, categories_json, relevance_score,
                        registration_deadline, published_at, discovered_at
                 FROM seen_competitions
                 ORDER BY discovered_at DESC, relevance_score DESC
@@ -366,6 +374,7 @@ class RadarStorage:
                     title=row["title"],
                     url=row["url"],
                     source_name=row["source_name"],
+                    scope=row["scope"] or "Nasional (Indonesia)",
                     categories=cats or [CompetitionCategory.GENERAL_IT],
                     registration_deadline=row["registration_deadline"],
                     relevance_score=int(row["relevance_score"]),
@@ -375,21 +384,25 @@ class RadarStorage:
             )
         return items
 
-    def get_active_items(self, limit: int = 10) -> list[CompetitionItem]:
-        """Return ONLY competitions with a verified, non-expired registration deadline (>= today WIB), sorted by closest deadline."""
-        all_recent = self.get_recent_items(limit=200)
+    def get_active_items(
+        self, limit: int = 10, min_days_ahead: int = 0
+    ) -> list[CompetitionItem]:
+        """Return ONLY competitions with a verified deadline >= min_days_ahead from today, sorted by closest deadline."""
+        all_recent = self.get_recent_items(limit=250)
         active = [
             it
             for it in all_recent
-            if is_deadline_valid_and_open(it.registration_deadline)
+            if is_deadline_valid_and_open(
+                it.registration_deadline, min_days_ahead=min_days_ahead
+            )
         ]
         active.sort(
             key=lambda it: parse_deadline_date(it.registration_deadline) or datetime.max.date()
         )
         return active[:limit]
 
-    def prune_expired_or_undated(self) -> int:
-        """Delete legacy rows that have no verified registration deadline or whose deadline already passed."""
+    def prune_expired_or_undated(self, min_days_ahead: int = 0) -> int:
+        """Delete rows without a verified deadline or with fewer than `min_days_ahead` days left."""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT fingerprint, registration_deadline FROM seen_competitions;"
@@ -397,7 +410,7 @@ class RadarStorage:
             removed = 0
             for row in rows:
                 dl = row["registration_deadline"]
-                if not is_deadline_valid_and_open(dl):
+                if not is_deadline_valid_and_open(dl, min_days_ahead=min_days_ahead):
                     conn.execute(
                         "DELETE FROM seen_competitions WHERE fingerprint = ?;",
                         (row["fingerprint"],),

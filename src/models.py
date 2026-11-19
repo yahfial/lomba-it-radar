@@ -245,6 +245,10 @@ class CompetitionItem(BaseModel):
         default_factory=lambda: [CompetitionCategory.GENERAL_IT]
     )
     organizer: str = Field(default="Penyelenggara Nasional", description="Instansi penyelenggara")
+    scope: str = Field(
+        default="Nasional (Indonesia)",
+        description="Skala lomba: Nasional (Indonesia) atau Internasional (Online)",
+    )
     registration_deadline: Optional[str] = Field(
         default=None, description="Batas akhir pendaftaran lomba yang terdeteksi"
     )

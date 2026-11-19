@@ -26,6 +26,13 @@ class RadarConfig(BaseModel):
     max_age_days: int = Field(
         default_factory=lambda: int(os.getenv("MAX_AGE_DAYS", "14"))
     )
+    min_days_before_deadline: int = Field(
+        default_factory=lambda: int(os.getenv("MIN_DAYS_BEFORE_DEADLINE", "20"))
+    )
+    include_international: bool = Field(
+        default_factory=lambda: os.getenv("INCLUDE_INTERNATIONAL", "true").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     db_path: Path = Field(
         default_factory=lambda: Path(os.getenv("DB_PATH", "data/radar_history.db"))
     )

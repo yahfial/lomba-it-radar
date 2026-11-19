@@ -220,15 +220,34 @@ def test_telegram_html_formatting() -> None:
         title="Lomba AI & Data Science <Nasional> & Hackathon",
         url="https://dicoding.com/challenges/123",
         source_name="Dicoding",
+        scope="Internasional (Online)",
         categories=[CompetitionCategory.DATA_AI, CompetitionCategory.HACKATHON],
-        registration_deadline="30 November 2026",
+        registration_deadline="30 Januari 2027",
         matched_keywords=["hackathon", "data science"],
     )
     msg = format_telegram_message(item)
-    assert "<b>[LOMBA IT NASIONAL — BUKA PENDAFTARAN]</b>" in msg
-    assert "30 November 2026" in msg
+    assert "<b>[LOMBA IT — BUKA PENDAFTARAN]</b>" in msg
+    assert "Internasional (Online)" in msg
+    assert "30 Januari 2027" in msg
     assert "&lt;Nasional&gt; &amp; Hackathon" in msg
     assert "https://dicoding.com/challenges/123" in msg
+
+
+def test_h20_preparation_lead_time_and_english_dates() -> None:
+    ref_today = date(2026, 11, 19)
+    # English Devpost date parsing
+    assert parse_deadline_date("Jan 12, 2027", reference_date=ref_today) == date(2027, 1, 12)
+    assert parse_deadline_date("Dec 11, 2026", reference_date=ref_today) == date(2026, 12, 11)
+
+    # H-1 (20 Nov) and H-7 (26 Nov) MUST be rejected when min_days_ahead=20
+    assert is_deadline_valid_and_open("20 November 2026", min_days_ahead=20, reference_date=ref_today) is False
+    assert is_deadline_valid_and_open("26 November 2026", min_days_ahead=20, reference_date=ref_today) is False
+    assert is_deadline_valid_and_open("8 Desember 2026", min_days_ahead=20, reference_date=ref_today) is False  # H-19
+
+    # H-20 (9 Dec 2026), H-22 (11 Dec 2026), and H-54 (Jan 12, 2027) MUST pass
+    assert is_deadline_valid_and_open("9 Desember 2026", min_days_ahead=20, reference_date=ref_today) is True
+    assert is_deadline_valid_and_open("Dec 11, 2026", min_days_ahead=20, reference_date=ref_today) is True
+    assert is_deadline_valid_and_open("Jan 12, 2027", min_days_ahead=20, reference_date=ref_today) is True
 
 
 def test_semantic_event_deduplication_same_competition() -> None:

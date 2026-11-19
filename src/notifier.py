@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 import httpx
 
+from src.classifier import days_until_deadline
 from src.config import RadarConfig
 from src.models import CompetitionItem
 
@@ -38,19 +39,23 @@ def format_telegram_message(item: CompetitionItem) -> str:
         clean_snip = html.escape(item.snippet[:220])
         snippet_block = f"\n📝 <b>Ringkasan:</b>\n<i>{clean_snip}</i>\n"
 
+    safe_scope = html.escape(item.scope)
     if item.registration_deadline:
-        deadline_str = html.escape(item.registration_deadline)
+        rem = days_until_deadline(item.registration_deadline)
+        h_badge = f" (H-{rem})" if rem is not None and rem >= 0 else ""
+        deadline_str = f"{html.escape(item.registration_deadline)}{h_badge}"
     else:
-        deadline_str = "Cek detail tanggal pada link pendaftaran"
+        deadline_str = "-"
 
     safe_url = html.escape(item.url, quote=True)
 
     return (
-        f"🚨 <b>[LOMBA IT NASIONAL — BUKA PENDAFTARAN]</b>\n\n"
+        f"🚨 <b>[LOMBA IT — BUKA PENDAFTARAN]</b>\n\n"
         f"🏆 <b>{safe_title}</b>\n"
+        f"🌍 <b>Skala:</b> {safe_scope}\n"
         f"🏷️ <b>Kategori:</b> {safe_cats}\n"
         f"⏳ <b>Batas Pendaftaran:</b> {deadline_str}\n"
-        f"🏛️ <b>Sumber / Instansi:</b> {safe_organizer} ({safe_source})\n"
+        f"🏛️ <b>Penyelenggara:</b> {safe_organizer} ({safe_source})\n"
         f"🕒 <b>Terdeteksi:</b> {wib_time}"
         f"{snippet_block}\n"
         f"🔗 <a href=\"{safe_url}\">Daftar / Buka Info Resmi</a>\n\n"
@@ -218,27 +223,31 @@ class TelegramNotifier:
                 for cmd in ["/start", "/status", "/cek", "/terbaru", "status", "cek", "lomba"]
             ):
                 now_wib = datetime.now(WIB_TZ).strftime("%d %b %Y %H:%M WIB")
-                active_items = storage.get_active_items(limit=8)
+                min_days = self.config.min_days_before_deadline
+                active_items = storage.get_active_items(limit=10, min_days_ahead=min_days)
                 lines = [
                     "📡 <b>STATUS RADAR LOMBA IT 24/7: AKTIF</b>",
                     f"🕒 <b>Waktu Server:</b> {now_wib}",
-                    f"✅ <b>Lomba IT Aktif (Masih Buka Pendaftaran):</b> {len(active_items)} lomba",
+                    f"🛡️ <b>Filter Persiapan:</b> Minimal H-{min_days} sebelum penutupan",
+                    f"✅ <b>Lomba IT Aktif (Nasional &amp; Internasional):</b> {len(active_items)} lomba",
                     "",
                 ]
                 if not active_items:
                     lines.append(
-                        "ℹ️ Belum ada lomba IT baru dengan tanggal batas pendaftaran aktif yang terdeteksi saat ini. Bot terus memantau 24 jam."
+                        f"ℹ️ Belum ada lomba IT baru dengan batas pendaftaran minimal H-{min_days} yang terdeteksi saat ini. Bot terus memantau 24 jam."
                     )
                 else:
-                    lines.append("🏆 <b>Daftar Lomba IT Nasional yang Masih Buka Pendaftaran:</b>")
+                    lines.append("🏆 <b>Daftar Lomba IT Aktif (Siap Administrasi ≥ H-20):</b>")
                     for idx, it in enumerate(active_items, start=1):
-                        dl = html.escape(it.registration_deadline or "-")
+                        rem = days_until_deadline(it.registration_deadline)
+                        h_badge = f" (H-{rem})" if rem is not None and rem >= 0 else ""
+                        dl = f"{html.escape(it.registration_deadline or '-')}{h_badge}"
                         t_esc = html.escape(it.title[:95])
                         u_esc = html.escape(it.url, quote=True)
                         lines.append(
                             f"\n{idx}. <a href=\"{u_esc}\"><b>{t_esc}</b></a>\n"
-                            f"   ⏳ <b>Batas Pendaftaran:</b> {dl}\n"
-                            f"   🏛️ {html.escape(it.source_name)}"
+                            f"   🌍 {html.escape(it.scope)} | 🏛️ {html.escape(it.source_name)}\n"
+                            f"   ⏳ <b>Batas Pendaftaran:</b> {dl}"
                         )
                 lines.append(
                     "\n💡 <i>Perintah: /cek • /status • /terbaru • /scan</i>"

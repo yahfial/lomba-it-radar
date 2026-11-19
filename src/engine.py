@@ -29,12 +29,15 @@ class RadarEngine:
         self.collector = MultiSourceRadarCollector(config)
         self.notifier = TelegramNotifier(config)
         self._scan_lock = asyncio.Lock()
-        pruned = self.storage.prune_expired_or_undated()
+        pruned = self.storage.prune_expired_or_undated(
+            min_days_ahead=self.config.min_days_before_deadline
+        )
         removed = self.storage.deduplicate_existing_records()
         if pruned or removed:
             logger.info(
-                "Membersihkan %d lomba kedaluwarsa/tanpa deadline dan %d duplikat dari database.",
+                "Membersihkan %d lomba kedaluwarsa/<H-%d dan %d duplikat dari database.",
                 pruned,
+                self.config.min_days_before_deadline,
                 removed,
             )
 
@@ -63,7 +66,9 @@ class RadarEngine:
                 tf.write(blob.stdout)
                 tmp_path = Path(tf.name)
             try:
-                merged = self.storage.merge_from_sqlite(tmp_path)
+                merged = self.storage.merge_from_sqlite(
+                    tmp_path, min_days_ahead=self.config.min_days_before_deadline
+                )
                 if merged:
                     logger.info("Sinkronisasi %d lomba baru dari cloud GitHub ke DB lokal.", merged)
             finally:

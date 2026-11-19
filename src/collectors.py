@@ -169,11 +169,13 @@ class MultiSourceRadarCollector:
         if not is_valid:
             return None
 
-        # HARD GATE: Every competition MUST have a concrete, non-expired future deadline (>= today WIB)
+        # HARD GATE: Every competition MUST have a concrete deadline >= H-N (default H-20)
         deadline = explicit_deadline or extract_registration_deadline(
             f"{clean_title} {full_clean_snippet[:3500]}"
         )
-        if not is_deadline_valid_and_open(deadline):
+        if not is_deadline_valid_and_open(
+            deadline, min_days_ahead=self.config.min_days_before_deadline
+        ):
             return None
 
         parsed_dl = parse_deadline_date(deadline)
@@ -258,7 +260,7 @@ class MultiSourceRadarCollector:
             if not start_dt:
                 continue
             start_date_wib = start_dt.astimezone(WIB_TZ).date()
-            if start_date_wib < today_wib:
+            if (start_date_wib - today_wib).days < self.config.min_days_before_deadline:
                 continue
 
             formatted_dl = format_date_id(start_date_wib)
@@ -331,9 +333,11 @@ class MultiSourceRadarCollector:
             ):
                 continue
 
-            # Extract card date range (e.g., "13 Okt - 24 Nov 2026") and immediately skip expired cards
+            # Extract card date range (e.g., "13 Okt - 24 Nov 2026") and skip if < H-N (default H-20)
             card_deadline = extract_registration_deadline(card_text)
-            if not is_deadline_valid_and_open(card_deadline):
+            if not is_deadline_valid_and_open(
+                card_deadline, min_days_ahead=self.config.min_days_before_deadline
+            ):
                 continue
 
             # Fetch detail page to extract exact Penutupan Pendaftaran & full IT description
@@ -352,7 +356,9 @@ class MultiSourceRadarCollector:
                 continue
 
             exact_deadline = extract_registration_deadline(detail_text) or card_deadline
-            if not is_deadline_valid_and_open(exact_deadline):
+            if not is_deadline_valid_and_open(
+                exact_deadline, min_days_ahead=self.config.min_days_before_deadline
+            ):
                 continue
 
             parsed_dl = parse_deadline_date(exact_deadline)
@@ -380,6 +386,198 @@ class MultiSourceRadarCollector:
                     published_at=datetime.now(timezone.utc),
                     relevance_score=max(score, 85),
                     matched_keywords=kws,
+                )
+            )
+
+        return results
+
+    @staticmethod
+    def _extract_devpost_end_date(period_str: str) -> Optional[str]:
+        """Parse Devpost 'submission_period_dates' (e.g. 'Nov 17, 2026 - Jan 12, 2027' or 'Nov 11 - Dec 11, 2026')."""
+        if not period_str:
+            return None
+        parts = [p.strip() for p in re.split(r"\s*[-–—]\s*", period_str) if p.strip()]
+        if not parts:
+            return None
+        right = parts[-1]
+        if parse_deadline_date(right):
+            return right
+        # Same-month format: "Nov 17 - 20, 2026" -> inherit month from left side
+        if len(parts) >= 2:
+            m_left = re.match(r"^([A-Za-z]+)", parts[0])
+            if m_left:
+                reconstructed = f"{m_left.group(1)} {right}"
+                if parse_deadline_date(reconstructed):
+                    return reconstructed
+        return None
+
+    async def fetch_devpost_hackathons(
+        self, client: httpx.AsyncClient
+    ) -> list[CompetitionItem]:
+        """
+        Fetch open/upcoming International Online Hackathons from Devpost Public API.
+        Strictly filters for >= MIN_DAYS_BEFORE_DEADLINE (default H-20) so users have
+        plenty of preparation time for campus administration and team setup.
+        """
+        results: list[CompetitionItem] = []
+        kids_only_terms = ("teens in ai", "middle school", "k-12", "elementary", "high school only")
+
+        for page in (1, 2):
+            api_url = (
+                "https://devpost.com/api/hackathons"
+                f"?status[]=upcoming&status[]=open&challenge_type[]=online"
+                f"&order_by=recently-added&page={page}"
+            )
+            raw_json = await self.http_helper.get_text(client, api_url)
+            if not raw_json:
+                break
+
+            try:
+                payload = json.loads(raw_json)
+            except json.JSONDecodeError:
+                break
+
+            hacks = payload.get("hackathons", [])
+            if not hacks:
+                break
+
+            for h in hacks:
+                title = str(h.get("title", "")).strip()
+                url = str(h.get("url", "")).strip()
+                org = str(h.get("organization_name", "International Organizer")).strip() or "International Organizer"
+                period_dates = str(h.get("submission_period_dates", "")).strip()
+                prize_raw = strip_html_tags(str(h.get("prize_amount", "")))
+                themes_list = [
+                    str(t.get("name", "")).strip()
+                    for t in (h.get("themes") or [])
+                    if isinstance(t, dict) and t.get("name")
+                ]
+
+                if not title or not url.startswith("http"):
+                    continue
+                if any(k in title.lower() for k in kids_only_terms):
+                    continue
+
+                end_date_raw = self._extract_devpost_end_date(period_dates)
+                if not is_deadline_valid_and_open(
+                    end_date_raw, min_days_ahead=self.config.min_days_before_deadline
+                ):
+                    continue
+
+                parsed_dl = parse_deadline_date(end_date_raw)
+                formatted_dl = format_date_id(parsed_dl) if parsed_dl else end_date_raw
+
+                combined_lower = f"{title} {' '.join(themes_list)}".lower()
+                cats: list[CompetitionCategory] = [CompetitionCategory.HACKATHON]
+                kws: list[str] = ["hackathon", "international"]
+                if any(w in combined_lower for w in ("ai", "machine learning", "data", "agent", "llm", "ml")):
+                    cats.append(CompetitionCategory.DATA_AI)
+                    kws.append("ai")
+                if any(w in combined_lower for w in ("cyber", "security", "ctf", "privacy")):
+                    cats.append(CompetitionCategory.CYBERSECURITY)
+                    kws.append("cybersecurity")
+                if any(w in combined_lower for w in ("ui", "ux", "design")):
+                    cats.append(CompetitionCategory.UI_UX)
+                    kws.append("ui/ux")
+
+                prize_note = f"Hadiah: {prize_raw} | " if prize_raw and prize_raw != "$0" else ""
+                themes_note = f"Tema: {', '.join(themes_list[:4])}" if themes_list else "Online Global Hackathon"
+                snippet = f"{prize_note}{themes_note} (Periode: {period_dates})"
+
+                results.append(
+                    CompetitionItem(
+                        title=title,
+                        url=url,
+                        source_name="Devpost Global API",
+                        categories=cats,
+                        organizer=org,
+                        scope="Internasional (Online)",
+                        registration_deadline=formatted_dl,
+                        snippet=snippet[:280],
+                        published_at=datetime.now(timezone.utc),
+                        relevance_score=92,
+                        matched_keywords=kws,
+                    )
+                )
+
+        return results
+
+    async def fetch_ctftime_events(
+        self, client: httpx.AsyncClient
+    ) -> list[CompetitionItem]:
+        """
+        Fetch upcoming Open Online University & International Cyber Security (CTF) events
+        from CTFtime Official Public API starting >= MIN_DAYS_BEFORE_DEADLINE (default H-20).
+        """
+        now_utc = datetime.now(timezone.utc)
+        start_ts = int((now_utc + timedelta(days=self.config.min_days_before_deadline)).timestamp())
+        end_ts = int((now_utc + timedelta(days=150)).timestamp())
+        api_url = f"https://ctftime.org/api/v1/events/?limit=25&start={start_ts}&finish={end_ts}"
+
+        raw_json = await self.http_helper.get_text(client, api_url)
+        if not raw_json:
+            return []
+
+        try:
+            events = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return []
+
+        if not isinstance(events, list):
+            return []
+
+        today_wib = datetime.now(WIB_TZ).date()
+        results: list[CompetitionItem] = []
+
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            title = str(ev.get("title", "")).strip()
+            url = str(ev.get("url") or ev.get("ctftime_url") or "").strip()
+            onsite = bool(ev.get("onsite", False))
+            restrictions = str(ev.get("restrictions", "Open")).strip()
+            location = str(ev.get("location", "")).strip()
+            is_indonesia = "indonesia" in f"{title} {location}".lower()
+
+            # Only include Open events that are Online (accessible from Indonesia) or onsite in Indonesia
+            if restrictions.lower() != "open":
+                continue
+            if onsite and not is_indonesia:
+                continue
+            if "finals" in title.lower() and not is_indonesia:
+                continue
+
+            start_dt = parse_rss_datetime(str(ev.get("start", "")))
+            if not start_dt:
+                continue
+            start_date_wib = start_dt.astimezone(WIB_TZ).date()
+            if (start_date_wib - today_wib).days < self.config.min_days_before_deadline:
+                continue
+
+            formatted_dl = format_date_id(start_date_wib)
+            orgs = ev.get("organizers") or []
+            organizer = (
+                str(orgs[0].get("name", "CTFtime Organizer")).strip()
+                if isinstance(orgs, list) and orgs and isinstance(orgs[0], dict)
+                else "CTFtime Organizer"
+            )
+            desc = strip_html_tags(str(ev.get("description", "")))
+            fmt_name = str(ev.get("format", "Jeopardy")).strip()
+            snippet = f"Format: {fmt_name} CTF | {desc}" if desc else f"Kompetisi Cyber Security ({fmt_name} CTF)"
+
+            results.append(
+                CompetitionItem(
+                    title=title,
+                    url=url,
+                    source_name="CTFtime Official API",
+                    categories=[CompetitionCategory.CYBERSECURITY],
+                    organizer=organizer,
+                    scope="Nasional (Indonesia)" if is_indonesia else "Internasional (Online)",
+                    registration_deadline=formatted_dl,
+                    snippet=snippet[:280],
+                    published_at=datetime.now(timezone.utc),
+                    relevance_score=90,
+                    matched_keywords=["ctf", "cybersecurity"],
                 )
             )
 
@@ -597,6 +795,18 @@ class MultiSourceRadarCollector:
                 all_candidates.extend(await self.fetch_infolomba_it(client))
             except Exception as exc:
                 errors.append(f"InfoLombaIT: {exc}")
+
+            # 1b. International University & Online IT Platforms (Devpost, CTFtime — >= H-20)
+            if self.config.include_international:
+                try:
+                    all_candidates.extend(await self.fetch_devpost_hackathons(client))
+                except Exception as exc:
+                    errors.append(f"Devpost: {exc}")
+
+                try:
+                    all_candidates.extend(await self.fetch_ctftime_events(client))
+                except Exception as exc:
+                    errors.append(f"CTFtime: {exc}")
 
             # 2. Direct Competition Portal RSS Feeds (Full-text descriptions + explicit deadlines)
             for feed_url, label in self.config.direct_rss_feeds:
