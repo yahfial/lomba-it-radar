@@ -37,9 +37,24 @@ class RadarStorage:
                     source_name TEXT NOT NULL,
                     categories_json TEXT NOT NULL,
                     relevance_score INTEGER NOT NULL DEFAULT 0,
+                    registration_deadline TEXT,
                     published_at TEXT,
                     discovered_at TEXT NOT NULL,
                     notified INTEGER NOT NULL DEFAULT 0
+                );
+                """
+            )
+            try:
+                conn.execute(
+                    "ALTER TABLE seen_competitions ADD COLUMN registration_deadline TEXT;"
+                )
+            except sqlite3.OperationalError:
+                pass
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
                 );
                 """
             )
@@ -48,6 +63,21 @@ class RadarStorage:
                 CREATE INDEX IF NOT EXISTS idx_title_fingerprint
                 ON seen_competitions (title_fingerprint);
                 """
+            )
+            conn.commit()
+
+    def get_meta(self, key: str, default: str = "") -> str:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM bot_meta WHERE key = ?;", (key,)
+            ).fetchone()
+            return str(row["value"]) if row else default
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO bot_meta (key, value) VALUES (?, ?);",
+                (key, value),
             )
             conn.commit()
 
@@ -83,10 +113,11 @@ class RadarStorage:
                     source_name,
                     categories_json,
                     relevance_score,
+                    registration_deadline,
                     published_at,
                     discovered_at,
                     notified
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     item.fingerprint,
@@ -96,6 +127,7 @@ class RadarStorage:
                     item.source_name,
                     json.dumps(categories_list, ensure_ascii=False),
                     item.relevance_score,
+                    item.registration_deadline,
                     published_iso,
                     discovered_iso,
                     1 if notified else 0,
@@ -125,9 +157,9 @@ class RadarStorage:
             rows = conn.execute(
                 """
                 SELECT title, url, source_name, categories_json, relevance_score,
-                       published_at, discovered_at
+                       registration_deadline, published_at, discovered_at
                 FROM seen_competitions
-                ORDER BY relevance_score DESC, discovered_at DESC
+                ORDER BY discovered_at DESC, relevance_score DESC
                 LIMIT ?;
                 """,
                 (limit,),
@@ -156,6 +188,7 @@ class RadarStorage:
                     url=row["url"],
                     source_name=row["source_name"],
                     categories=cats or [CompetitionCategory.GENERAL_IT],
+                    registration_deadline=row["registration_deadline"],
                     relevance_score=int(row["relevance_score"]),
                     published_at=pub_dt,
                     discovered_at=disc_dt,

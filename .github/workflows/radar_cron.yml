@@ -38,7 +38,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MAX_AGE_DAYS: "7"
+          MAX_AGE_DAYS: "14"
           DB_PATH: "data/radar_history.db"
         run: |
           python main.py --once

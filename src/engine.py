@@ -55,6 +55,10 @@ class RadarEngine:
                     notified_count += 1
                     await asyncio.sleep(1.2)  # Prevent Telegram flood limits
 
+        # Process any incoming Telegram commands (/cek, /status, /terbaru)
+        if self.config.is_telegram_configured:
+            await self.notifier.process_pending_commands(self.storage)
+
         finished_at = datetime.now(timezone.utc)
         summary = ScanSummary(
             started_at=started_at,

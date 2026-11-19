@@ -4,12 +4,16 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
-from datetime import timezone, timedelta
+from datetime import datetime, timezone, timedelta
+from typing import TYPE_CHECKING
 
 import httpx
 
 from src.config import RadarConfig
 from src.models import CompetitionItem
+
+if TYPE_CHECKING:
+    from src.storage import RadarStorage
 
 logger = logging.getLogger("lomba_radar.notifier")
 
@@ -81,7 +85,8 @@ class TelegramNotifier:
         }
 
         client_kwargs: dict[str, object] = {
-            "timeout": httpx.Timeout(self.config.request_timeout_seconds)
+            "timeout": httpx.Timeout(self.config.request_timeout_seconds),
+            "verify": False,
         }
         if self.config.http_proxy:
             client_kwargs["proxy"] = self.config.http_proxy
@@ -106,6 +111,86 @@ class TelegramNotifier:
                     await asyncio.sleep(2.0 * attempt)
 
         return False
+
+    async def send_raw_html(self, html_text: str, chat_id: str = "") -> bool:
+        """Send an arbitrary HTML message to Telegram."""
+        if not self.config.is_telegram_configured:
+            return False
+        target_chat = chat_id or self.config.telegram_chat_id
+        api_url = (
+            f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage"
+        )
+        payload = {
+            "chat_id": target_chat,
+            "text": html_text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+            try:
+                resp = await client.post(api_url, json=payload)
+                resp.raise_for_status()
+                return True
+            except Exception as exc:
+                logger.error("Gagal mengirim pesan HTML Telegram: %s", exc)
+                return False
+
+    async def process_pending_commands(self, storage: RadarStorage) -> int:
+        """Check Telegram getUpdates and reply to /status, /cek, /terbaru, or /start commands."""
+        if not self.config.is_telegram_configured:
+            return 0
+
+        last_update_str = storage.get_meta("last_telegram_update_id", "0")
+        offset = int(last_update_str) + 1 if last_update_str.isdigit() else 0
+        api_url = (
+            f"https://api.telegram.org/bot{self.config.telegram_bot_token}/getUpdates"
+        )
+
+        replied = 0
+        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+            try:
+                resp = await client.get(api_url, params={"offset": offset, "timeout": 1})
+                resp.raise_for_status()
+                updates = resp.json().get("result", [])
+            except Exception as exc:
+                logger.warning("Gagal memeriksa getUpdates Telegram: %s", exc)
+                return 0
+
+        for upd in updates:
+            upd_id = int(upd.get("update_id", 0))
+            storage.set_meta("last_telegram_update_id", str(upd_id))
+
+            msg = upd.get("message") or {}
+            text = (msg.get("text") or "").strip().lower()
+            chat_id = str(msg.get("chat", {}).get("id", ""))
+            if not text or not chat_id:
+                continue
+
+            if any(cmd in text for cmd in ["/start", "/status", "/cek", "/terbaru", "status", "cek", "lomba"]):
+                now_wib = datetime.now(WIB_TZ).strftime("%d %b %Y %H:%M WIB")
+                recent = storage.get_recent_items(limit=6)
+                lines = [
+                    f"📡 <b>STATUS RADAR LOMBA IT 24/7: AKTIF</b>",
+                    f"🕒 <b>Waktu Server:</b> {now_wib}",
+                    f"🗄️ <b>Total Lomba Terdata:</b> {storage.count_total()} lomba",
+                    "",
+                    "🏆 <b>6 Lomba IT &amp; Inovasi Terbaru yang Terdeteksi:</b>",
+                ]
+                for idx, it in enumerate(recent, start=1):
+                    dl = html.escape(it.registration_deadline or "Cek di link")
+                    t_esc = html.escape(it.title[:90])
+                    u_esc = html.escape(it.url, quote=True)
+                    lines.append(
+                        f"\n{idx}. <a href=\"{u_esc}\"><b>{t_esc}</b></a>\n"
+                        f"   ⏳ Batas: {dl} | 🏛️ {html.escape(it.source_name)}"
+                    )
+                lines.append(
+                    "\n💡 <i>Kirim /cek atau /terbaru kapan saja untuk melihat status &amp; daftar terbaru.</i>"
+                )
+                if await self.send_raw_html("\n".join(lines), chat_id=chat_id):
+                    replied += 1
+
+        return replied
 
     async def send_test_ping(self) -> bool:
         """Send a test connection message to verify Bot Token and Chat ID."""

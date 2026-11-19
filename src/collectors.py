@@ -13,7 +13,11 @@ from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from src.classifier import evaluate_competition_relevance, extract_registration_deadline
+from src.classifier import (
+    evaluate_competition_relevance,
+    extract_registration_deadline,
+    is_deadline_expired,
+)
 from src.config import RadarConfig
 from src.models import CompetitionItem
 
@@ -116,17 +120,23 @@ class MultiSourceRadarCollector:
             return None
 
         clean_title = strip_html_tags(title)
-        clean_snippet = strip_html_tags(snippet)[:280]
+        full_clean_snippet = strip_html_tags(snippet)
         if len(clean_title) < 5 or not url.startswith("http"):
             return None
 
+        # Evaluate IT relevance on title + lead summary (first 350 chars) so footer boilerplate doesn't cause false positives
         is_valid, score, categories, matched_kws = evaluate_competition_relevance(
-            clean_title, clean_snippet
+            clean_title, full_clean_snippet[:350]
         )
         if not is_valid:
             return None
 
-        deadline = extract_registration_deadline(f"{clean_title} {clean_snippet}")
+        # Extract deadline from full article text and reject if expired
+        deadline = extract_registration_deadline(f"{clean_title} {full_clean_snippet[:3500]}")
+        if is_deadline_expired(deadline):
+            return None
+
+        clean_snippet = full_clean_snippet[:280]
 
         return CompetitionItem(
             title=clean_title,
@@ -234,58 +244,36 @@ class MultiSourceRadarCollector:
 
         return results
 
-    async def fetch_dicoding_challenges_and_events(
-        self, client: httpx.AsyncClient
+    async def fetch_direct_rss_feed(
+        self, client: httpx.AsyncClient, feed_url: str, label: str
     ) -> list[CompetitionItem]:
-        """Scrape official Dicoding Challenges & Events pages for national hackathons/competitions."""
-        urls = [
-            ("https://www.dicoding.com/challenges", "Dicoding Challenges"),
-            ("https://www.dicoding.com/events", "Dicoding Events"),
-        ]
+        """Fetch and parse direct competition portal RSS feeds (KabarLomba, Dicoding Blog, etc.)."""
+        xml_text = await self.http_helper.get_text(client, feed_url)
+        if not xml_text:
+            return []
+
         results: list[CompetitionItem] = []
+        try:
+            root = ET.fromstring(xml_text)
+            for item_el in root.findall(".//item"):
+                title = (item_el.findtext("title") or "").strip()
+                link = (item_el.findtext("link") or "").strip()
+                desc = (item_el.findtext("description") or "").strip()
+                pub_raw = item_el.findtext("pubDate")
+                pub_dt = parse_rss_datetime(pub_raw)
 
-        for page_url, label in urls:
-            html_text = await self.http_helper.get_text(client, page_url)
-            if not html_text:
-                continue
-
-            soup = BeautifulSoup(html_text, "html.parser")
-            for anchor in soup.find_all("a", href=True):
-                href = str(anchor["href"]).strip()
-                if not (
-                    "/challenges/" in href or "/events/" in href
-                ):
-                    continue
-                if href.endswith("/challenges") or href.endswith("/events"):
-                    continue
-
-                full_url = urljoin(page_url, href)
-                title_text = anchor.get_text(" ", strip=True)
-                if len(title_text) < 8:
-                    card_parent = anchor.find_parent(["div", "article", "li"])
-                    if card_parent:
-                        heading = card_parent.find(["h2", "h3", "h4", "h5", "strong"])
-                        if heading:
-                            title_text = heading.get_text(" ", strip=True)
-
-                if len(title_text) < 8:
-                    continue
-
-                # Dicoding challenges are inherently IT competitions
-                enriched_title = (
-                    f"[Dicoding Competition] {title_text}"
-                    if "challenges" in page_url
-                    else title_text
-                )
                 built = self._build_item_if_relevant(
-                    title=enriched_title,
-                    url=full_url,
+                    title=title,
+                    url=link,
                     source_name=label,
-                    snippet="Kompetisi / Event resmi di portal Dicoding Indonesia",
-                    organizer="Dicoding Indonesia & Partner",
+                    snippet=desc,
+                    published_at=pub_dt,
+                    organizer=label,
                 )
                 if built:
                     results.append(built)
+        except ET.ParseError as exc:
+            logger.warning("Failed parsing direct RSS XML (%s): %s", label, exc)
 
         return results
 
@@ -333,7 +321,7 @@ class MultiSourceRadarCollector:
                 title=headline,
                 url=post_url,
                 source_name=f"Telegram @{clean_handle}",
-                snippet=raw_text[:300],
+                snippet=raw_text,
                 published_at=pub_dt,
                 organizer=f"Via @{clean_handle}",
             )
@@ -350,6 +338,7 @@ class MultiSourceRadarCollector:
         client_kwargs: dict[str, object] = {
             "headers": DEFAULT_HEADERS,
             "timeout": httpx.Timeout(self.config.request_timeout_seconds),
+            "verify": False,
         }
         if self.config.http_proxy:
             client_kwargs["proxy"] = self.config.http_proxy
@@ -371,12 +360,13 @@ class MultiSourceRadarCollector:
                 except Exception as exc:
                     errors.append(f"BingNews({q}): {exc}")
 
-            # 3. Dicoding Challenges & Events
-            try:
-                dicoding_items = await self.fetch_dicoding_challenges_and_events(client)
-                all_candidates.extend(dicoding_items)
-            except Exception as exc:
-                errors.append(f"Dicoding: {exc}")
+            # 3. Direct Competition & Tech Portal RSS Feeds (KabarLomba, Dicoding Blog)
+            for feed_url, label in self.config.direct_rss_feeds:
+                try:
+                    rss_items = await self.fetch_direct_rss_feed(client, feed_url, label)
+                    all_candidates.extend(rss_items)
+                except Exception as exc:
+                    errors.append(f"DirectRSS({label}): {exc}")
 
             # 4. Public Telegram Channels
             for channel in self.config.telegram_public_channels:

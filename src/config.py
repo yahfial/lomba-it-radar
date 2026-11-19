@@ -24,7 +24,7 @@ class RadarConfig(BaseModel):
         default_factory=lambda: int(os.getenv("SCAN_INTERVAL_MINUTES", "15"))
     )
     max_age_days: int = Field(
-        default_factory=lambda: int(os.getenv("MAX_AGE_DAYS", "7"))
+        default_factory=lambda: int(os.getenv("MAX_AGE_DAYS", "14"))
     )
     db_path: Path = Field(
         default_factory=lambda: Path(os.getenv("DB_PATH", "data/radar_history.db"))
@@ -39,25 +39,40 @@ class RadarConfig(BaseModel):
         default_factory=lambda: os.getenv("HTTP_PROXY", "").strip() or None
     )
 
-    # Google News RSS Search Queries (Real-time Indonesian Open Registration Indexing)
+    # Google News RSS Search Queries (Clean syntax without nested parentheses so Google RSS returns full results)
     google_news_queries: list[str] = Field(
         default_factory=lambda: [
-            '("pendaftaran" OR "dibuka" OR "open registration") ("hackathon" OR "lomba IT" OR "kompetisi IT") indonesia',
-            '("pendaftaran" OR "dibuka") ("capture the flag" OR "lomba cyber security" OR "CTF") indonesia',
-            '("pendaftaran" OR "dibuka") ("lomba UI/UX" OR "UI/UX design competition") mahasiswa indonesia',
-            '("pendaftaran" OR "dibuka") ("lomba data science" OR "datathon" OR "kompetisi AI") indonesia',
-            '("pendaftaran" OR "dibuka") ("competitive programming" OR "lomba coding" OR "lomba pemrograman") indonesia',
-            '("pendaftaran" OR "dibuka") (gemastik OR compfest OR arkavidia OR "schematics its" OR "find it ugm" OR "hology ub")',
+            "hackathon indonesia",
+            "lomba IT OR kompetisi IT mahasiswa indonesia",
+            "lomba cyber security OR capture the flag indonesia",
+            "lomba UI UX OR desain aplikasi mahasiswa indonesia",
+            "lomba data science OR datathon OR kompetisi AI indonesia",
+            "lomba coding OR competitive programming mahasiswa indonesia",
+            "gemastik OR compfest OR arkavidia OR schematics OR find it ugm OR hology",
+            "lomba inovasi digital OR lomba aplikasi mahasiswa",
         ]
     )
 
-    # Bing News RSS Queries (Secondary Real-time Search Index)
+    # Bing News RSS Queries (Concise keywords so Bing RSS doesn't drop headlines)
     bing_news_queries: list[str] = Field(
         default_factory=lambda: [
-            "pendaftaran hackathon mahasiswa indonesia dibuka",
-            "pendaftaran lomba teknologi informasi nasional dibuka",
-            "pendaftaran kompetisi cyber security CTF indonesia",
-            "pendaftaran lomba UI UX design mahasiswa nasional",
+            "hackathon indonesia",
+            "lomba IT mahasiswa",
+            "kompetisi cyber security indonesia",
+            "lomba UI UX mahasiswa",
+            "kompetisi AI data science indonesia",
+            "lomba inovasi teknologi mahasiswa",
+        ]
+    )
+
+    # Direct RSS Feeds with full-text descriptions & deadlines
+    direct_rss_feeds: list[tuple[str, str]] = Field(
+        default_factory=lambda: [
+            ("https://www.kabarlomba.com/feeds/posts/default?alt=rss", "KabarLomba Official RSS"),
+            ("https://www.kabarlomba.com/feeds/posts/default?alt=rss&q=teknologi", "KabarLomba Tech RSS"),
+            ("https://www.kabarlomba.com/feeds/posts/default?alt=rss&q=aplikasi", "KabarLomba App RSS"),
+            ("https://www.kabarlomba.com/feeds/posts/default?alt=rss&q=website", "KabarLomba Web RSS"),
+            ("https://www.dicoding.com/blog/feed/", "Dicoding Indonesia Blog RSS"),
         ]
     )
 
