@@ -150,26 +150,21 @@ COMPETITION_ACTION_KEYWORDS: list[str] = [
 REGISTRATION_BOOST_KEYWORDS: list[str] = [
     r"\bpendaftaran\b",
     r"\bregistrasi\b",
-    r"\b(?:di|mem)?buka\b",
+    r"\bdibuka\b",
+    r"\bmembuka\b",
+    r"\bbuka\s+(?:pendaftaran|registrasi|lomba|kompetisi)\b",
     r"\bopen\s+registration\b",
     r"\bearly\s+bird\b",
     r"\bdaftar(?:\s+sekarang)?\b",
     r"\bguidebook\b",
     r"\boprec\b",
     r"\bcall\s+for\b",
-    r"\b(?:di|me)?tantang\b",
-    r"\b(?:di|meng)?gelar\b",
-    r"\b(?:meng)?hadirkan\b",
-    r"\b(?:mem)?perlombakan\b",
-    r"\bincar\b",
-    r"\bsiapkan\b",
-    r"\bikuti\b",
+    r"\bditantang\b",
     r"\bhadiah\b",
     r"\bprize\s+pool\b",
-    r"\bgratis\b",
 ]
 
-# Post-event / completed competition news (HARD REJECT: bukan lomba yang sedang buka pendaftaran)
+# Post-event / ongoing-event / completed competition news (HARD REJECT: bukan lomba yang baru buka pendaftaran)
 POST_EVENT_CEREMONIAL_PATTERNS: list[str] = [
     r"\bpelepasan\s+kontingen\b",
     r"\bdoa\s+bersama\b",
@@ -182,7 +177,7 @@ POST_EVENT_CEREMONIAL_PATTERNS: list[str] = [
     r"\blolos\s+final\b",
     r"\btembus\s+(?:final|semifinal)\b",
     r"\bmelaju\s+ke\s+(?:final|tingkat\s+nasional)\b",
-    r"\bsukses\s+digelar\b",
+    r"\bsukses\s+(?:di|meng)?gelar\b",
     r"\bresmi\s+ditutup\b",
     r"\btelah\s+berakhir\b",
     r"\bpenutupan\b",
@@ -192,7 +187,9 @@ POST_EVENT_CEREMONIAL_PATTERNS: list[str] = [
     r"\bmengantarkan\b",
     r"\bkalahkan\b",
     r"\bposisi\s+strategis\b",
-    r"\bikuti\s+kompetisi\s+keamanan\s+siber\s+akpol\b",
+    r"\bdiikuti\s+\d+\b",
+    r"\b\d+\s+(?:tim|mahasiswa|peserta|orang)(?:\s+startup)?\s+(?:ikuti|mengikuti)\b",
+    r"\bsoroti\b",
 ]
 
 # Negative noise filters (non-IT competitions or unrelated news)
@@ -217,6 +214,9 @@ NEGATIVE_NOISE_PATTERNS: list[str] = [
     r"\blomba\s+debat\b",
     r"\blomba\s+infografis\b",
     r"\blomba\s+video\b",
+    r"\breels\b",
+    r"\bvideo\s+pendek\b",
+    r"\bbusiness\s+model\s+canvas\b",
     r"\bcpns\b",
     r"\blowongan\s+kerja\s+admin\b",
     r"\bwebsite\s+desa\b",

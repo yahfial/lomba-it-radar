@@ -90,6 +90,11 @@ def test_classifier_rejects_post_event_completed_news() -> None:
         ("Mahasiswa UNAIR Lolos Final GEMASTIK XIX", "Inovasi pemulihan adiksi"),
         ("Tim FILKOM Raih Juara Pertama Kompetisi UI/UX Nasional", "Berhasil mengalahkan puluhan tim"),
         ("Pelepasan Kontingen PIMNAS dan Gemastik 2026 oleh Rektor", "Doa bersama sebelum berangkat"),
+        ("TI Usakti sukses gelar Kompetisi Rekayasa Kualitas Tingkat Nasional IX", "Kegiatan berlangsung meriah"),
+        ("30 Tim Startup Ikuti Hackathon MAJU ON 2026 27 di Jakarta", "Acara dibuka untuk para finalis"),
+        ("Diikuti 98 Mahasiswa, BEM FIKOM Umuslim Gelar Lomba Website dan Blogspot", "Berlangsung di aula"),
+        ("Lomba Reels Competition Nasional 2026 untuk Mahasiswa Kesehatan, Hadiah Uang Pembinaan", "Buat video pendek"),
+        ("Lomba Business Model Canvas NBMC 1.0 2026-2027, Hadiah dan Beasiswa UMY", "Kompetisi BMC"),
     ]
     for title, snippet in post_event_cases:
         is_valid, _, _, _ = evaluate_competition_relevance(title, snippet)

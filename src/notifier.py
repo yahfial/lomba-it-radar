@@ -5,7 +5,7 @@ import asyncio
 import html
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 import httpx
 
@@ -135,8 +135,32 @@ class TelegramNotifier:
                 logger.error("Gagal mengirim pesan HTML Telegram: %s", exc)
                 return False
 
-    async def process_pending_commands(self, storage: RadarStorage) -> int:
-        """Check Telegram getUpdates and reply to /status, /cek, /terbaru, or /start commands."""
+    async def register_bot_commands(self) -> None:
+        """Register native slash commands menu in Telegram."""
+        if not self.config.is_telegram_configured:
+            return
+        api_url = (
+            f"https://api.telegram.org/bot{self.config.telegram_bot_token}/setMyCommands"
+        )
+        commands = [
+            {"command": "cek", "description": "Cek status bot & daftar lomba IT terbaru"},
+            {"command": "status", "description": "Lihat status radar 24/7 saat ini"},
+            {"command": "terbaru", "description": "Tampilkan 6 lomba IT terbaru"},
+            {"command": "scan", "description": "Pindai internet sekarang juga secara manual"},
+        ]
+        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+            try:
+                await client.post(api_url, json={"commands": commands})
+            except Exception as exc:
+                logger.debug("Gagal setMyCommands: %s", exc)
+
+    async def process_pending_commands(
+        self,
+        storage: RadarStorage,
+        poll_timeout: int = 1,
+        on_scan_request: Optional[Callable[[], Awaitable[tuple[int, int]]]] = None,
+    ) -> int:
+        """Check Telegram getUpdates and reply to /status, /cek, /terbaru, /scan, or /start."""
         if not self.config.is_telegram_configured:
             return 0
 
@@ -147,13 +171,16 @@ class TelegramNotifier:
         )
 
         replied = 0
-        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+        req_timeout = max(10.0, float(poll_timeout) + 10.0)
+        async with httpx.AsyncClient(timeout=req_timeout, verify=False) as client:
             try:
-                resp = await client.get(api_url, params={"offset": offset, "timeout": 1})
+                resp = await client.get(
+                    api_url, params={"offset": offset, "timeout": poll_timeout}
+                )
                 resp.raise_for_status()
                 updates = resp.json().get("result", [])
             except Exception as exc:
-                logger.warning("Gagal memeriksa getUpdates Telegram: %s", exc)
+                logger.debug("Gagal memeriksa getUpdates Telegram: %s", exc)
                 return 0
 
         for upd in updates:
@@ -166,11 +193,34 @@ class TelegramNotifier:
             if not text or not chat_id:
                 continue
 
-            if any(cmd in text for cmd in ["/start", "/status", "/cek", "/terbaru", "status", "cek", "lomba"]):
+            if text.startswith("/scan"):
+                await self.send_raw_html(
+                    "🔎 <b>Memulai pemindaian real-time sekarang...</b>\n"
+                    "Mohon tunggu sekitar 15–30 detik.",
+                    chat_id=chat_id,
+                )
+                if on_scan_request is not None:
+                    valid_cnt, new_cnt = await on_scan_request()
+                    await self.send_raw_html(
+                        f"✅ <b>Pemindaian Selesai!</b>\n"
+                        f"• Kandidat Lomba IT Valid: <b>{valid_cnt}</b>\n"
+                        f"• Lomba Baru Ditemukan: <b>{new_cnt}</b>",
+                        chat_id=chat_id,
+                    )
+                else:
+                    await self.send_raw_html(
+                        "ℹ️ Mode scan manual instan hanya tersedia saat daemon lokal aktif.",
+                        chat_id=chat_id,
+                    )
+                replied += 1
+            elif any(
+                cmd in text
+                for cmd in ["/start", "/status", "/cek", "/terbaru", "status", "cek", "lomba"]
+            ):
                 now_wib = datetime.now(WIB_TZ).strftime("%d %b %Y %H:%M WIB")
                 recent = storage.get_recent_items(limit=6)
                 lines = [
-                    f"📡 <b>STATUS RADAR LOMBA IT 24/7: AKTIF</b>",
+                    "📡 <b>STATUS RADAR LOMBA IT 24/7: AKTIF</b>",
                     f"🕒 <b>Waktu Server:</b> {now_wib}",
                     f"🗄️ <b>Total Lomba Terdata:</b> {storage.count_total()} lomba",
                     "",
@@ -185,7 +235,7 @@ class TelegramNotifier:
                         f"   ⏳ Batas: {dl} | 🏛️ {html.escape(it.source_name)}"
                     )
                 lines.append(
-                    "\n💡 <i>Kirim /cek atau /terbaru kapan saja untuk melihat status &amp; daftar terbaru.</i>"
+                    "\n💡 <i>Perintah: /cek • /status • /terbaru • /scan</i>"
                 )
                 if await self.send_raw_html("\n".join(lines), chat_id=chat_id):
                     replied += 1
